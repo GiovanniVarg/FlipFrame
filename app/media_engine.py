@@ -44,7 +44,7 @@ def validate_local_media(source):
 def probe(source):
     source = validate_local_media(source)
     if not os.path.isfile(source): raise ValueError('Source file does not exist')
-    if os.path.getsize(source) > 200 * 1024 * 1024: raise ValueError('Source exceeds 200 MB limit')
+    # Upload byte limits belong to admission; lossless working files may be larger.
     cap = cv2.VideoCapture(source)
     fps = cap.get(cv2.CAP_PROP_FPS)
     count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -52,7 +52,7 @@ def probe(source):
     cap.release()
     if fps <= 0 or count <= 0 or not width or not height: raise ValueError('No readable video stream')
     duration = count / fps
-    if duration > 60.1: raise ValueError('Video exceeds 60 second limit')
+    if not math.isfinite(duration) or duration > 3600.1: raise ValueError('Video exceeds 60 minute limit')
     if width * height > 1920 * 1080: raise ValueError('Video exceeds 1080p pixel limit')
     result = subprocess.run([FFMPEG, '-hide_banner', '-protocol_whitelist', 'file,pipe', '-format_whitelist', 'mov,matroska,webm,wav,avi,mp3,ogg,flac,aac', '-i', source], capture_output=True)
     return dict(duration=duration, width=width, height=height, fps=fps, frames=count,

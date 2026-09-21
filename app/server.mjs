@@ -29,7 +29,7 @@ import {validateEdit,applyCandidate,undoProject} from './domain.mjs';
 import {createConversationService,computeGenerationWindow} from './conversation.mjs';
 import {classifyEdit} from './decision-router.mjs';
 import {registerProjectDraftRoutes} from './project-drafts.mjs';
-import {createProjectImporter,registerSampleProjectRoutes} from './sample-project.mjs';
+import {createProjectImporter,registerSampleProjectRoutes,MAX_SOURCE_BYTES} from './sample-project.mjs';
 import {registerMarkerRoutes} from './markers.mjs';
 import {registerCandidateReviewRoutes} from './candidate-review.mjs';
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
@@ -53,7 +53,7 @@ export function runMedia(request,onProgress){return new Promise((resolve,reject)
  const file=path.join(DATA,'request-'+id()+'.json');fs.writeFileSync(file,JSON.stringify(request));
  const segment=['segment','segment_video'].includes(request.action);const segPython=process.env.SEGMENTATION_PYTHON||path.join(ROOT,'.segmentation-env',process.platform==='win32'?'Scripts/python.exe':'bin/python');
  const child=spawn(segment||['object_repair','precision_recolor','deterministic','transformation','transformation_track'].includes(request.action)?segPython:process.env.PYTHON||'python',['transformation','transformation_track'].includes(request.action)?[path.join(ROOT,'transformation_engine.py'),file]:request.action==='deterministic'?[path.join(ROOT,'local_edit.py'),file]:request.action==='precision_recolor'?[path.join(ROOT,'precision_recolor.py'),file]:request.action==='object_repair'?[path.join(ROOT,'object_repair.py'),file]:segment?[path.join(ROOT,'segmentation.py')]:[path.join(ROOT,'media_engine.py'),file],{cwd:ROOT,windowsHide:true});if(segment){child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({...request,operation:request.action==='segment_video'?'video':'frame',polygon:request.points}));}
- let stdout='',stderr='',progressBuffer='';const killTree=()=>{if(process.platform==='win32')spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();};const timer=setTimeout(()=>{killTree();reject(new Error('Media processing exceeded the 10 minute limit.'));},600000);
+ let stdout='',stderr='',progressBuffer='';const killTree=()=>{if(process.platform==='win32')spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();};const timeoutMs=request.action==='normalize'?7200000:600000;const timer=setTimeout(()=>{killTree();reject(new Error(`Media processing exceeded the ${timeoutMs/60000} minute limit.`));},timeoutMs);
  child.stdout.on('data',b=>{stdout+=b;if(stdout.length>12000000)killTree();});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-8000);if(onProgress){progressBuffer+=b;const lines=progressBuffer.split('\n');progressBuffer=lines.pop().slice(-1000);for(const line of lines){const phase=repairProgress(line);if(phase)onProgress(phase);}}});
  child.on('error',e=>{clearTimeout(timer);fs.rmSync(file,{force:true});reject(e);});
  child.on('close',code=>{if(segment&&code)console.warn('Segmentation worker exit',code,stderr);clearTimeout(timer);fs.rmSync(file,{force:true});try{const result=JSON.parse(stdout.trim());if(code||result.error||(!segment&&!result.ok))throw new Error(result.error||'Media processing failed');resolve(result);}catch(e){reject(new Error(e.message==='Unexpected end of JSON input'?'Media engine failed. Check Python dependencies.':e.message));}});
@@ -84,6 +84,7 @@ const maxStorage=Number(process.env.LAB_MAX_STORAGE_BYTES||10*1024**3);
 if(!Number.isFinite(maxStorage)||maxStorage<200*1024**2)throw new Error('LAB_MAX_STORAGE_BYTES must be at least 200 MiB');
 function storageAvailable(extra=0){const used=fs.readdirSync(path.join(DATA,'media')).reduce((sum,name)=>{const entry=fs.statSync(path.join(DATA,'media',name));return sum+(entry.isFile()?entry.size:0);},0);if(used+extra>maxStorage)throw new Error('Workspace storage limit reached. Ask the operator to archive unused media.');}
 function candidateCapacity(projectId){if(Object.values(db.candidates).filter(c=>c.projectId===projectId).length+Object.values(db.jobs).filter(j=>j.projectId===projectId&&['queued','running'].includes(j.status)).length>=100)throw new Error('Project limit: 100 candidates. Start a new project or archive this one.');storageAvailable();}
+const sourceUpload=multer({dest:path.join(DATA,'uploads'),limits:{fileSize:MAX_SOURCE_BYTES,files:1}});
 const upload=multer({dest:path.join(DATA,'uploads'),limits:{fileSize:200*1024*1024,files:1}});
 
 app.get('/api/capabilities',asyncRoute(async(req,res)=>{
@@ -110,7 +111,7 @@ const originals=createOriginalService({db,save,adapter,storageAvailable,mediaPat
 registerOriginalRoutes(app,{service:originals,upload:multer({dest:path.join(DATA,'uploads'),limits:{fileSize:10*1024*1024,files:1}}),asyncRoute});
 registerSampleProjectRoutes(app,{db,importProject,fixturePath:path.join(ROOT,'sample-source.mp4'),uploadDirectory:path.join(DATA,'uploads'),publicProject});
 registerReferenceImages(app,{upload:multer({dest:path.join(DATA,'uploads'),limits:{fileSize:10*1024*1024,files:1}}),db,save,projectById,storageAvailable,id,mediaPath,mediaUrl,runMedia:withMediaTask,asyncRoute});
-app.post('/api/projects',upload.single('file'),asyncRoute(async(req,res)=>{
+app.post('/api/projects',sourceUpload.single('file'),asyncRoute(async(req,res)=>{
  const project=await importProject(req.file,req.user.id);res.status(201).json(publicProject(project));
 }));
 app.post('/api/projects/:id/assets',upload.single('file'),asyncRoute(async(req,res)=>{
@@ -259,6 +260,9 @@ app.post('/api/projects/:id/conversation',asyncRoute(async(req,res)=>res.json(aw
 app.post('/api/projects/:id/conversation/plans/:planId/execute',asyncRoute(async(req,res)=>{const result=await conversation.execute(req.params.id,req.user.id,req.params.planId,req.body);if(result.project)result.project=publicProject(projectById(req.params.id,req.user.id));res.json(result);}));
 if(fs.existsSync(path.join(ROOT,'dist/index.html'))){app.use(express.static(path.join(ROOT,'dist')));app.get('/{*path}',(req,res)=>res.sendFile(path.join(ROOT,'dist/index.html')));}else{const {createServer}=await import('vite');const vite=await createServer({root:ROOT,server:{middlewareMode:true},appType:'spa'});app.use(vite.middlewares);}
 app.use((err,req,res,next)=>{res.status(err.status||400).json({error:err.message||'Request failed'});});
-const port=Number(process.env.PORT||8780);app.listen(port,process.env.HOST||(MODE==='saas'?'0.0.0.0':'127.0.0.1'),()=>console.log('Video Gen Lab: http://127.0.0.1:'+port));
+const port=Number(process.env.PORT||8780);const server=app.listen(port,process.env.HOST||(MODE==='saas'?'0.0.0.0':'127.0.0.1'),()=>console.log('Video Gen Lab: http://127.0.0.1:'+port));
 
 scheduleQueue();
+
+// Long source uploads may take more than Node's default five-minute window.
+server.requestTimeout=2*60*60*1000;

@@ -60,3 +60,19 @@ test('bundled synthetic fixture passes actual probe, normalization and thumbnail
  const project=await create('alice');assert.ok(Math.abs(project.duration-8)<1/30);assert.equal(project.fps,30);assert.equal(project.width,640);assert.equal(project.height,360);assert.ok(project.waveform.length);assert.ok(project.thumbnailUrl.endsWith('.jpg'));assert.equal(digest(f.fixturePath),hash);
  const output=await runMedia({action:'probe',source:project.revisions[0].path});assert.equal(output.hasAudio,true);assert.equal(output.fps,30);assert.deepEqual(f.db.spend,{spent:0,reserved:0});
 });
+
+
+test('source import accepts industrial footage and keeps the 2 GiB / 60 minute admission boundary',async t=>{
+ const f=fixture(t);let duration=127.208333;
+ const importer=createProjectImporter({...f.dependencies,runMedia:async request=>{
+  if(request.action==='probe')return {duration,width:1920,height:1080};
+  const result=await f.dependencies.runMedia(request);return {...result,duration};
+ }});
+ const upload=size=>{const target=path.join(f.dir,randomUUID()+'.mp4');fs.copyFileSync(f.fixturePath,target);return {path:target,originalname:'Industrial.mp4',size};};
+ const project=await importer(upload(387630426),'alice');assert.equal(project.duration,duration);
+ duration=3600;assert.equal((await importer(upload(2*1024**3),'alice')).duration,3600);
+ await assert.rejects(importer(upload(2*1024**3+1),'alice'),/2 GiB/);
+ duration=3600.01;await assert.rejects(importer(upload(500*1024**2),'alice'),/60 minutes/);
+ assert.equal(Object.values(f.db.projects).length,2);
+});
+

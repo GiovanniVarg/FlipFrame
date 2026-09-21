@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 
+export const MAX_SOURCE_BYTES=2*1024**3;
+export const MAX_SOURCE_SECONDS=60*60;
+
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 export const SAMPLE_PROVENANCE=Object.freeze({kind:'synthetic-practice',version:1,label:'Coastal Drift · practice clip',description:'An original deterministic illustration with a moving balloon and quiet tone, created locally for practicing edits. Not a Higgsfield generation or evidence of model quality.'});
 
@@ -12,11 +15,11 @@ export function createProjectImporter({db,save,runMedia,mediaPath,mediaUrl,stora
   if(!file)throw fail('Choose a video file.');let acquired=false,key,source,normalized,thumbnail,project;
   try{
    if(Object.values(db.projects).filter(p=>p.ownerId===ownerId).length>=20)throw fail('Workspace limit: 20 projects including trash. Ask the operator to archive unused projects.',429);
-   if(!Number.isFinite(file.size)||file.size<=0||file.size>200*1024*1024)throw fail('Use a nonempty video up to 200 MiB.');
+   if(!Number.isFinite(file.size)||file.size<=0||file.size>MAX_SOURCE_BYTES)throw fail('Choose a nonempty video up to 2 GiB.');
    acquireMedia();acquired=true;key=id();source=mediaPath(key+'-original',path.extname(file.originalname).toLowerCase()==='.mov'?'mov':'mp4');normalized=mediaPath(key);thumbnail=mediaPath(key+'-strip','jpg');
    storageAvailable(file.size);
    const info=await runMedia({action:'probe',source:file.path});
-   if(info.duration>60||info.width>1920||info.height>1920)throw fail('Use a video up to 60 seconds and 1080p.');
+   if(!Number.isFinite(info.duration)||info.duration<=0||info.duration>MAX_SOURCE_SECONDS||info.width>1920||info.height>1920||info.width*info.height>1920*1080)throw fail('Choose a video up to 60 minutes long and 1080p.');
    fs.renameSync(file.path,source);
    const meta=await runMedia({action:'normalize',source,output:normalized,fps:30});
    let analysis={};try{const data=await runMedia({action:'analyze',source:normalized,output:thumbnail});analysis={thumbnailUrl:mediaUrl(thumbnail),waveform:data.peaks};}catch{fs.rmSync(thumbnail,{force:true});}

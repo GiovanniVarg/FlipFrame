@@ -2,7 +2,8 @@ import './ImportGuidance.css';
 
 export function ImportGuidance() {
   return <div className="import-guidance">
-    <p className="import-limits">Up to 60 seconds · 200 MiB · 1080p</p>
+    <p className="import-limits">Up to 60 minutes · 2 GiB · 1080p</p>
+    <p>Long videos can take several minutes to prepare. Keep this tab open until your video is ready.</p>
     <details>
       <summary>Formats and import changes</summary>
       <p>MP4 or MOV recommended. Other video formats depend on decoder support; the file is checked during import.</p>

@@ -36,6 +36,18 @@ class MediaTests(unittest.TestCase):
         np.testing.assert_array_equal(ref[48,80],original[48,80])
         self.assertLess(float(ref[0,0].sum()),float(original[0,0].sum())*.3)
 
+    def test_probe_accepts_long_sources_without_decoding_every_frame(self):
+        from unittest.mock import patch, MagicMock
+        capture=MagicMock()
+        capture.get.side_effect=lambda key: {m.cv2.CAP_PROP_FPS:30, m.cv2.CAP_PROP_FRAME_COUNT:108000, 3:1920, 4:1080}[key]
+        with patch.object(m.cv2,'VideoCapture',return_value=capture):
+            self.assertEqual(m.probe(self.source)['duration'],3600)
+            capture.read.assert_not_called()
+        capture.get.side_effect=lambda key: {m.cv2.CAP_PROP_FPS:30, m.cv2.CAP_PROP_FRAME_COUNT:108030, 3:1920, 4:1080}[key]
+        with patch.object(m.cv2,'VideoCapture',return_value=capture):
+            with self.assertRaisesRegex(ValueError,'60 minute'):
+                m.probe(self.source)
+
     def test_probe_normalize_audio_duration(self):
         p=m.probe(self.source)
         self.assertTrue(p['hasAudio']); self.assertAlmostEqual(p['duration'],2,places=2)
