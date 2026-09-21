@@ -63,10 +63,10 @@ test('known unknown acceptance recovers by identity without a second POST',async
  assert.equal((await execute(f,plan)).status,'completed');assert.equal(f.calls.submit,1);assert.equal(f.calls.poll,1);assert.equal(f.db.spend.reserved,.5);
 });
 
-test('definite rejected POST releases once but accepted failure keeps its hold',async()=>{
+test('definite rejected POST and provider-confirmed failure release holds',async()=>{
  for(const accepted of [false,true]){
   const f=fixture(),plan=f.service.plan('alice',request);f.deps.adapter.submitGeneration=async()=>{f.calls.submit++;return {status:'failed',...(accepted?{requestId:'accepted-1'}:{})};};
-  const result=await execute(f,plan);assert.equal(result.status,'failed');assert.equal(result.recoverable,false);assert.equal(f.db.spend.reserved,accepted?.5:0);await assert.rejects(f.service.recover('alice',plan.id),{status:409});assert.equal(f.calls.submit,1);
+  const result=await execute(f,plan);assert.equal(result.status,'failed');assert.equal(result.recoverable,false);assert.equal(f.db.spend.reserved,0);await assert.rejects(f.service.recover('alice',plan.id),{status:409});assert.equal(f.calls.submit,1);
  }
 });
 

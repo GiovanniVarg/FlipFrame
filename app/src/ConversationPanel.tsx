@@ -1,3 +1,6 @@
+import {TypedReply} from './TypedReply';
+import {LOCAL_TOOLS} from '../local-tools.mjs';
+import {selectionIntent} from '../selection-intent.mjs';
 import {editImpact,generationButton,editScope,reservationLabel} from '../edit-impact.mjs';
 import {BatchVariations} from './BatchVariations';
 import {BrandPresets} from './BrandPresets';
@@ -10,15 +13,17 @@ import './ConversationPanel.css';
 import {ImportGuidance} from './ImportGuidance';
 
 type Quality = 'standard' | 'draft';
-type EditIntent = WorkflowAction | 'mute' | 'gain' | 'replace_audio' | 'replace_picture' | 'picture' | 'object' | 'generate_audio';
+type EditIntent = string | WorkflowAction | 'mute' | 'gain' | 'replace_audio' | 'replace_picture' | 'picture' | 'object' | 'generate_audio';
 const intentLabels: Record<EditIntent, string> = {
-  ...Object.fromEntries(Object.entries(EDITOR_WORKFLOWS).map(([key,w])=>[key,w.title])) as Record<WorkflowAction,string>,
+  ...Object.fromEntries(Object.entries(LOCAL_TOOLS).map(([id,t])=>[id,t.title])),
+  ...Object.fromEntries(Object.entries({...EDITOR_WORKFLOWS,...LOCAL_TOOLS}).map(([key,w])=>[key,w.title])) as Record<WorkflowAction,string>,
   picture: 'Picture edit', object: 'Object edit', generate_audio: 'Generate sound', mute: 'Mute sound',
   gain: 'Adjust volume', replace_audio: 'Use an audio file', replace_picture: 'Use a video file',
 };
 type SendOverride = {referenceImageId?:string; text: string; intent: EditIntent; start: number; end: number; baseRevisionId: string; quality?: Quality};
 
 export type ConversationPlan = {
+ selectedObjectName?:string;tool?:string;requiresMask?:boolean;requiresReference?:boolean;changesTimeline?:boolean;
   targetCandidateId?:string; targetCandidateLabel?:string; suggestions?:EditIntent[];
   referenceImage?:{id:string,url:string,name:string};
   id: string;
@@ -40,7 +45,7 @@ export type ConversationPlan = {
 type Message = {referenceImage?:{id:string,url:string,name:string}; id: string; role: 'user' | 'assistant'; text: string; createdAt: string; planId?: string; intent?: EditIntent; quality?: Quality};
 type Conversation = {messages: Message[]; plans: ConversationPlan[]; router: {configured: boolean}};
 type Candidate = CandidateEvidence & {maskReviewUrl?:string; id: string; url: string; label?: string; note?: string; start?: number; end?: number};
-type Job = {type?:string;recoveryMode?:string;recoverable?:boolean; id: string; status: string; phase?: string; error?: string; result?: Candidate; baseRevisionId?: string};
+type Job = {billing?:string;type?:string;recoveryMode?:string;recoverable?:boolean; id: string; status: string; phase?: string; error?: string; result?: Candidate; baseRevisionId?: string};
 type Props = {
   savedDraft:{text:string,quality:Quality,referenceImageId?:string};onDraftChange:(draft:((previous:{text:string,quality:Quality,referenceImageId?:string})=>{text:string,quality:Quality,referenceImageId?:string}))=>void;draftLoading:boolean;draftStatus:string;
   focusPlanId?: string; refreshVersion?: number;
@@ -53,6 +58,7 @@ type Props = {
   candidate: Candidate | null;
   jobs: Job[];
   maskReady: boolean;
+  maskCount:number;objectName:string;
   objectIssue: (start:number,end:number)=>string;
   hasReplacementAudio: boolean;
   hasReplacementVideo: boolean;
@@ -65,6 +71,7 @@ type Props = {
   onExecute: (plan: ConversationPlan) => Promise<void>;
   onReview: (candidate: Candidate) => void;
   onApply: () => Promise<void>;
+  onInspectWarning:(time:number)=>void;
   onDiscard: () => void;
   repairPending:boolean;
   onResumeRepair:()=>void;
@@ -85,13 +92,14 @@ async function requestConversation(url: string, body?: unknown, signal?: AbortSi
   return data;
 }
 
-export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftStatus,focusPlanId,refreshVersion,project, start, end, busy, statusMessage, error, candidate, jobs, maskReady, objectIssue, hasReplacementAudio, hasReplacementVideo,
-  onImport, onGenerate, onExample, onOpenEditor, onExecute, onRetry, retryingJobId, onReview, onApply, onDiscard, onCorrect, onOpenAlternatives, repairPending, onResumeRepair, onDismissError}: Props) {
+export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftStatus,focusPlanId,refreshVersion,project, start, end, busy, statusMessage, error, candidate, jobs, maskReady, maskCount, objectName, objectIssue, hasReplacementAudio, hasReplacementVideo,
+  onImport, onGenerate, onExample, onOpenEditor, onExecute, onRetry, retryingJobId, onReview, onApply, onInspectWarning, onDiscard, onCorrect, onOpenAlternatives, repairPending, onResumeRepair, onDismissError}: Props) {
   const [toolsOpen,setToolsOpen]=useState(false),[toolTab,setToolTab]=useState('styles');
   const toolsDialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{if(toolsOpen)toolsDialog.current?.showModal();else toolsDialog.current?.close()},[toolsOpen]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const draft=savedDraft.text,quality=savedDraft.quality;
+  const [animatedReply,setAnimatedReply]=useState('');
   const setDraft=(text:string)=>onDraftChange(previous=>({...previous,text}));
   const setQuality=(quality:Quality)=>onDraftChange(previous=>({...previous,quality}));
   const [loading, setLoading] = useState(false);
@@ -170,7 +178,7 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
     }
     const id = project.id;
     const input = {text, baseRevisionId: project.activeRevisionId, start: override?.start ?? start,
-      end: override?.end ?? end, quality: override?.quality ?? quality, referenceImageId:override?override.referenceImageId:savedDraft.referenceImageId, intent: override?.intent,reviewCandidateId:candidate?.id};
+      end: override?.end ?? end, quality: override?.quality ?? quality, referenceImageId:override?override.referenceImageId:savedDraft.referenceImageId, intent: override?.intent ?? selectionIntent(text,maskReady),reviewCandidateId:candidate?.id,selectionContext:{hasMask:maskCount>0,reviewed:maskReady,maskCount,objectName}};
     const signature = JSON.stringify(input);
     if (retryRequest.current?.signature !== signature) retryRequest.current = {signature, key: crypto.randomUUID()};
     sendLock.current = true; setSending(true); setPendingText(text); setPendingIntent(input.intent); setConversationError('');
@@ -178,7 +186,7 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
     try {
       const data = await requestConversation(`/api/projects/${id}/conversation`, {...input, idempotencyKey: retryRequest.current.key});
       if (projectId.current !== id) return;
-      if (sequence === requests.current) setConversation(data);
+      if (sequence === requests.current) {setConversation(data);setAnimatedReply(data.messages.filter(m=>m.role==='assistant').at(-1)?.id||'');}
       if (!override) onDraftChange(previous=>({...previous,text:'',referenceImageId:''}));
       retryRequest.current = null;
     } catch (reason) {
@@ -214,7 +222,7 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
   }
 
   function renderPlan(plan: ConversationPlan) {
-    const impact=editImpact(plan.action);
+    const impact=plan.tool&&LOCAL_TOOLS[plan.tool]?{changes:LOCAL_TOOLS[plan.tool].criterion,preserves:LOCAL_TOOLS[plan.tool].preserves,review:'Review the preview before applying. Jev chooses a tool; the renderer enforces its permitted changes.'}:plan.route.id==='precision-recolor'?{changes:'Matching paint colors inside the reviewed mask only. No cleanup expansion.',preserves:'Original spatial positions, neutral and dark details, and decoded pixels outside the allowed color mask. Audio stream is copied.',review:'Check the tracked selection and final color. Similar-colored details inside your mask can change.'}:editImpact(plan.action);
     const stale = project?.activeRevisionId !== plan.baseRevisionId;
     const clarifying = plan.action === 'clarify' && plan.status === 'needs_input';
     const originalMessage = clarifying ? originalMessageForPlan(plan) : undefined;
@@ -225,20 +233,20 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
         baseRevisionId: plan.baseRevisionId, referenceImageId:originalMessage.referenceImage?.id, quality: originalMessage.quality ?? plan.quality ?? quality});
     }
     const job = jobs.find(item => item.id === plan.jobId);
-    const objectPlan = /object|mask/.test(plan.action);
-    const selectionIssue = objectPlan && !job && ['ready','needs_input'].includes(plan.status) ? objectIssue(plan.start,plan.end) : "";
+    const objectPlan = !!plan.requiresMask||/object|mask/.test(plan.action);
+    const selectionIssue = objectPlan && !job && ['ready','needs_input'].includes(plan.status) ? (plan.selectedObjectName&&plan.selectedObjectName!==objectName?'This card targets another object. Send a new request for the active selection.':objectIssue(plan.start,plan.end)) : "";
     const inputReady = (objectPlan && !selectionIssue && (plan.route.estimatedUsd ?? 0) <= 5) || (plan.action === 'replace_audio' && hasReplacementAudio) || (plan.action === 'replace_picture' && hasReplacementVideo);
     const canRun = (!objectPlan || !selectionIssue) && (plan.status === 'ready' || (plan.status === 'needs_input' && inputReady));
-    const cost = plan.route.costLabel || (plan.route.estimatedUsd !== undefined ? `Est. $${plan.route.estimatedUsd.toFixed(2)}` : plan.route.kind === 'local' || plan.route.kind === 'ui' ? 'No generation cost' : 'Quote checked before generation');
+    const cost = job?.billing==='Provider confirmed no charge; budget reservation released' ? 'No charge · reservation released' : plan.route.costLabel || (plan.route.estimatedUsd !== undefined ? `Est. $${plan.route.estimatedUsd.toFixed(2)}` : plan.route.kind === 'local' || plan.route.kind === 'ui' ? 'No generation cost' : 'Quote checked before generation');
     const status = job?.status || plan.status;
     return <article id={'plan-'+plan.id} tabIndex={-1} className={`conversation-plan plan-${status}`} key={plan.id} aria-label={plan.title}>
-      <div className="plan-heading"><span className="eyebrow">{plan.route.kind === 'ui' ? 'Workspace action' : 'Proposed edit'}</span><span className="plan-state">{selectionIssue ? 'Selection needed' : status === 'needs_input' ? 'One more step' : status === 'ready' ? 'Ready to preview' : status==='completed'&&plan.route.kind==='ui'?'Tool opened':status.replaceAll('_', ' ')}</span></div>
-      <h3>{plan.title}</h3><p>{plan.explanation}</p>{plan.targetCandidateLabel&&<p>Target: {plan.targetCandidateLabel}</p>}
+      <div className="plan-heading"><span className="eyebrow">{plan.route.kind === 'ui' ? 'Workspace action' : 'Proposed edit'}</span><span className="plan-state">{selectionIssue ? 'Selection needed' : status === 'needs_input' ? (canRun?'Ready to preview':'One more step') : status === 'ready' ? 'Ready to preview' : status==='completed'&&plan.route.kind==='ui'?'Tool opened':status.replaceAll('_', ' ')}</span></div>
+      <h3>{plan.title}</h3>{plan.targetCandidateLabel&&<p>Target: {plan.targetCandidateLabel}</p>}
       {selectionIssue && <p className="plan-next-step"><strong>Next: finish selecting the object.</strong><br/>{selectionIssue}</p>}
       {!stale && objectPlan && ['needs_input','ready'].includes(plan.status) && !!selectionIssue && <button className="plan-run" disabled={busy} onClick={() => onOpenEditor('object', {...plan,requestText:originalMessageForPlan(plan)?.text})}>Finish selecting the object <span aria-hidden="true">→</span></button>}
-      <dl className="plan-facts"><div><dt>Scope</dt><dd>{editScope(plan,project?.duration??plan.end)}</dd></div><div><dt>Range</dt><dd className="mono">{formatTime(plan.start)} – {formatTime(plan.end)}</dd></div>{plan.processStart!==undefined&&plan.processEnd!==undefined&&<div><dt>Sent for context</dt><dd className="mono">{formatTime(plan.processStart)} – {formatTime(plan.processEnd)}</dd></div>}<div><dt>Route</dt><dd>{plan.route.label}{plan.route.resolution && !plan.route.label.includes(plan.route.resolution) ? ` · ${plan.route.resolution}` : ''}</dd></div><div><dt>Cost</dt><dd>{cost}</dd></div></dl>
-      {impact&&['ready','needs_input'].includes(plan.status)&&<section className="edit-impact" aria-label="What this edit changes"><p><strong>Changes</strong> {impact.changes}</p><p><strong>Keeps</strong> {impact.preserves}</p><p>{impact.review}</p>{plan.route.kind==='higgsfield'&&<small>{reservationLabel(plan)} The estimate is not a final billing guarantee. Your current revision changes only after you apply a candidate.</small>}</section>}
-      {plan.warnings?.length > 0 && <details open={!selectionIssue} className="plan-details"><summary>Generation details <span>{plan.warnings.length}</span></summary>{plan.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
+      <div className="plan-compact-facts"><span>{plan.selectedObjectName|| (objectPlan?objectName:'Selected footage')}</span><span className="mono">{formatTime(plan.start)} – {formatTime(plan.end)}</span><strong>{cost}</strong></div>
+      {plan.route.kind==='higgsfield'&&<p className="plan-compact-note">{reservationLabel(plan,job)}</p>}
+      <details className="plan-details"><summary>Model, scope & details</summary><p>{plan.explanation}</p><p>{plan.route.label} {plan.route.resolution||''}</p>{plan.processStart!==undefined&&<p>Source context: {formatTime(plan.processStart)} – {formatTime(plan.processEnd??plan.end)}</p>}{impact&&<><p><strong>Changes:</strong> {impact.changes}</p><p><strong>Keeps:</strong> {impact.preserves}</p><p>{impact.review}</p></>}{plan.warnings?.map((warning,index)=><p key={index}>{warning}</p>)}</details>
       {job?.phase && <p className="plan-job-status" role="status">{job.phase}</p>}
       {job?.error && <p className="error">{job.error}</p>}
       {job?.recoverable && !stale && <><button className="primary plan-run" disabled={busy||sending||!!executing||!!retryingJobId} onClick={()=>void onRetry(job)}>{retryingJobId===job.id?'Checking…':jobGuidance(job).action}<span aria-hidden="true">→</span></button><p className="help">{jobGuidance(job).detail}</p></>}
@@ -260,7 +268,7 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
         <details className="clarification-more"><summary>Volume or replacement files</summary><div>
           {(['mute', 'gain', 'replace_audio', 'replace_picture'] as EditIntent[]).map(intent => <button type="button" key={intent} onClick={() => chooseIntent(intent)}>{intentLabels[intent]}<span aria-hidden="true">↗</span></button>)}
         </div></details>
-        <details className="clarification-more"><summary>Selection, correction and review</summary><div>{Object.entries(EDITOR_WORKFLOWS).map(([key,w])=><button type="button" key={key} onClick={()=>chooseIntent(key as WorkflowAction)}>{w.title}</button>)}</div></details>
+        <details className="clarification-more"><summary>Selection, correction and review</summary><div>{Object.entries({...EDITOR_WORKFLOWS,...LOCAL_TOOLS}).map(([key,w])=><button type="button" key={key} onClick={()=>chooseIntent(key as WorkflowAction)}>{w.title}</button>)}</div></details>
       </fieldset>}
       {clarifying && stale && <p className="plan-note">This request belongs to an earlier revision. Describe your edit again for the current video.</p>}
       {plan.status === 'needs_input' && !objectPlan && !['replace_audio', 'replace_picture'].includes(plan.action) && (!clarifying || !originalMessage) && <p className="plan-note">Add the requested detail in the conversation below.</p>}
@@ -270,40 +278,41 @@ export function ConversationPanel({savedDraft,onDraftChange,draftLoading,draftSt
 
   const messages=conversation?.messages??[];
   const latestUser=messages.reduce((last,item,index)=>item.role==='user'?index:last,-1);
-  const earlier=messages.slice(0,Math.max(0,latestUser));
-  const current=messages.slice(Math.max(0,latestUser));
+  const focusedReview=!!candidate||repairPending;
+  const earlier=focusedReview?messages:messages.slice(0,Math.max(0,latestUser));
+  const current=focusedReview?[]:messages.slice(Math.max(0,latestUser));
   const shownPlanIds = new Set(conversation?.messages.map(item => item.planId).filter(Boolean));
   const activeJob = jobs.find(job => ['queued', 'running'].includes(job.status));
   return <aside className="conversation-panel" aria-label="Project conversation">
     <div className="conversation-heading"><div><span className="eyebrow">Your workspace</span><h1>What should change?</h1></div><button className="conversation-library" onClick={() => onOpenEditor('Media')} aria-label="Open project library" title="Project library"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 7h7l2-3h9v15H3Z"/></svg></button></div>
     <div className="conversation-scroll" ref={scrollArea}>
-      <FirstEditGuide project={!!project} selected={maskReady} candidate={!!candidate} busy={busy||draftLoading||sending} onImport={onImport} onExample={onExample} onGenerate={onGenerate} onSelect={()=>onOpenEditor('object')} onDescribe={()=>composer.current?.focus()} onReview={()=>candidate&&onReview(candidate)}/>
+      {!focusedReview&&!busy&&messages.length===0&&<FirstEditGuide project={!!project} selected={maskReady} candidate={!!candidate} busy={busy||draftLoading||sending} onImport={onImport} onExample={onExample} onGenerate={onGenerate} onSelect={()=>onOpenEditor('object')} onDescribe={()=>composer.current?.focus()} onReview={()=>candidate&&onReview(candidate)}/>}
 
       {!project ? <div className="conversation-intro"><span className="conversation-glyph" aria-hidden="true">↗</span><h2>Start with a video.<br/>Tell us what to change.</h2><p>A quieter soundtrack. A different background. One detail that needs another take.</p><p>Describe the result you want, review the proposed edit, then compare it with your original.</p><button className="primary" disabled={busy} onClick={onImport}>Import your video <span aria-hidden="true">↗</span></button><button className="wide" disabled={busy} onClick={onExample}>Try a sample · no generation cost</button><ImportGuidance/><div className="conversation-start-foot">Already started? <button onClick={() => onOpenEditor('Media')}>Open a project</button></div></div> : <>
         {loading && !conversation ? <div className="conversation-skeleton" role="status" aria-label="Loading saved conversation"><span/><span/><span/></div> : conversation?.messages.length === 0 ? <div className="conversation-intro has-project"><span className="eyebrow">Ready when you are</span><h2>What would you like<br/>to change?</h2><p>Use your own words. Include a moment or time range when you have one in mind.</p><div className="conversation-suggestions"><button onClick={() => suggest('Mute the selected range')}>Mute the selected range <span>↗</span></button><button onClick={() => suggest('Change the background from ')}>Change a background <span>↗</span></button><button onClick={() => suggest('Help me edit an object in this video')}>Edit one object <span>↗</span></button></div></div> : null}
         <div className="conversation-messages" role="log" aria-label="Saved messages" aria-live="polite" aria-relevant="additions">
           {earlier.length>0 && <details className="conversation-history"><summary>History · {earlier.filter(item=>item.role==='user').length} earlier requests</summary>{earlier.map(item=><div className={`conversation-message message-${item.role}`} key={item.id}><div className="message-author">{item.role==='user'?'You':'Studio'}</div><p>{item.text}</p></div>)}<button onClick={()=>onOpenEditor('Activity')}>Find earlier results</button></details>}
-          {current.map(item => <div className={`conversation-message message-${item.role}`} key={item.id}><div className="message-author">{item.role === 'user' ? 'You' : 'Studio'}{item.role === 'user' && item.intent && intentLabels[item.intent] && <span className="message-intent">{intentLabels[item.intent]}</span>}</div><p>{item.role==='assistant' && conversation?.plans.some(plan=>plan.id===item.planId && plan.action==='object') ? 'First, select what should change. Then create a preview to compare with your original.' : item.text}</p>{item.referenceImage&&<img className="reference-thumbnail" src={item.referenceImage.url} alt={`Reference: ${item.referenceImage.name}`}/>} {item.planId && conversation?.plans.find(plan => plan.id === item.planId) ? renderPlan(conversation?.plans.find(plan => plan.id === item.planId)!) : null}</div>)}
-          {conversation?.plans.filter(plan => !shownPlanIds.has(plan.id)).map(renderPlan)}
+          {current.map(item => <div className={`conversation-message message-${item.role}`} key={item.id}><div className="message-author">{item.role === 'user' ? 'You' : 'Studio'}{item.role === 'user' && item.intent && intentLabels[item.intent] && <span className="message-intent">{intentLabels[item.intent]}</span>}</div>{item.role==='assistant'?<TypedReply animate={animatedReply===item.id} text={conversation?.plans.some(plan=>plan.id===item.planId&&plan.action==='object')?(maskReady?`Ready to edit ${objectName} in your selected range.`:'Select and review the object to continue.'):item.text}/>:<p>{item.text}</p>}{item.referenceImage&&<img className="reference-thumbnail" src={item.referenceImage.url} alt={`Reference: ${item.referenceImage.name}`}/>} {item.planId && conversation?.plans.find(plan => plan.id === item.planId) ? renderPlan(conversation?.plans.find(plan => plan.id === item.planId)!) : null}</div>)}
+          {!focusedReview&&conversation?.plans.filter(plan => !shownPlanIds.has(plan.id)).map(renderPlan)}
           {pendingText && <div className="conversation-message message-user pending-message"><div className="message-author">You <span>· sending</span>{pendingIntent && <span className="message-intent">{intentLabels[pendingIntent]}</span>}</div><p>{pendingText}</p></div>}
           {sending && <div className="conversation-thinking" role="status"><span/><span/><span/><span className="sr-only">Preparing a response</span></div>}
         </div>
       </>}
-      {busy && <div className="conversation-progress" role="status"><span className="progress-line"/><strong>{activeJob?jobGuidance(activeJob).title:'Work in progress'}</strong><p>{activeJob?.phase || statusMessage || 'Processing your request…'}</p>{activeJob&&<p className="help">{jobGuidance(activeJob).detail}</p>}<button onClick={() => onOpenEditor('Activity')}>View activity <span aria-hidden="true">↗</span></button></div>}
+      {busy && <div className="conversation-progress" role="status"><span className="progress-line"/><strong>{activeJob?jobGuidance(activeJob).title:'Work in progress'}</strong><p>{activeJob?.phase || 'Preparing your request…'}</p>{activeJob&&<p className="help">{jobGuidance(activeJob).detail}</p>}<button onClick={() => onOpenEditor('Activity')}>View activity <span aria-hidden="true">↗</span></button></div>}
       {!busy && statusMessage && <p className="conversation-status" role="status">{statusMessage}</p>}
       {repairPending&&!busy&&<article className="conversation-candidate"><h3>Finish correcting your candidate</h3><p>Your saved generation is ready to reuse. Adjust the outline or protected areas, review the range, then rebuild locally.</p><button onClick={onResumeRepair}>Continue local correction</button></article>}
-      {candidate && <article className="conversation-candidate"><span className="eyebrow">Ready to compare</span><h3>{candidate.label || 'Your candidate is ready.'}</h3><p>Use A / B in the preview. Apply it when you are happy with the result.</p>{candidate.start !== undefined && candidate.end !== undefined && <p className="mono candidate-range">{formatTime(candidate.start)} – {formatTime(candidate.end)}</p>}<CandidateQuality candidate={candidate}/>{candidate.maskReviewUrl&&<a href={candidate.maskReviewUrl} target="_blank" rel="noreferrer">Review automatic coverage (green)</a>}<button className="candidate-review" disabled={busy} onClick={() => onReview(candidate)}>Review in preview <span aria-hidden="true">↗</span></button>{candidate.maskReviewUrl&&<button disabled={busy} onClick={()=>onCorrect(candidate)}>Fix outline · no generation charge</button>}<div className="candidate-decision"><button className="primary" disabled={busy} onClick={() => void onApply()}>Apply candidate</button><button disabled={busy} onClick={onDiscard}>Discard</button></div></article>}
+      {candidate && <article className="conversation-candidate"><span className="eyebrow">{candidate.repairVerification?.qualityDiagnostics?.flaggedFrames?'Review warnings before applying':'Ready to compare'}</span><h3>{candidate.label || 'Your candidate is ready.'}</h3><p>Use A / B in the preview. Apply it when you are happy with the result.</p>{candidate.start !== undefined && candidate.end !== undefined && <p className="mono candidate-range">{formatTime(candidate.start)} – {formatTime(candidate.end)}</p>}<CandidateQuality candidate={candidate} onSeek={onInspectWarning}/>{candidate.maskReviewUrl&&<a href={candidate.maskReviewUrl} target="_blank" rel="noreferrer">Review automatic coverage (green)</a>}<button className="candidate-review" disabled={busy} onClick={() => onReview(candidate)}>Review in preview <span aria-hidden="true">↗</span></button>{candidate.maskReviewUrl&&!candidate.transformationVerification&&<button disabled={busy} onClick={()=>onCorrect(candidate)}>Fix outline · no generation charge</button>}<div className="candidate-decision"><button className="primary" disabled={busy} onClick={() => void onApply()}>Apply candidate</button><button disabled={busy} onClick={onDiscard}>Discard</button></div></article>}
       {(conversationError || error) && <div className="conversation-error" role="alert"><p>{conversationError || error}</p><div>{conversationError && !sending && !loading && <button onClick={() => setRetryVersion(value => value + 1)}>Reload conversation</button>}<button onClick={() => { setConversationError(''); onDismissError(); }}>Dismiss</button></div></div>}
     </div>
     <div className="conversation-compose-area">
-      {project && <div className="conversation-context"><span><span className="context-dot"/> {maskReady ? 'Object selection ready' : 'Editing this range'}<strong className="mono">{formatTime(start)} – {formatTime(end)}</strong></span><button onClick={() => onOpenEditor(maskReady ? 'object' : 'Edit')}>Adjust</button></div>}
+      {project && <div className="conversation-context"><span><span className="context-dot"/> {maskReady ? `${objectName} ready · ${maskCount} borders` : maskCount?`${objectName} · ${maskCount} borders · needs review`:'Editing this range'}<strong className="mono">{formatTime(start)} – {formatTime(end)}</strong></span><button onClick={() => onOpenEditor(maskCount ? 'object' : 'Edit')}>Adjust</button></div>}
       <div className="conversation-tools-row"><button type="button" aria-haspopup="dialog" onClick={()=>setToolsOpen(true)}>Tools & styles</button><button type="button" disabled={!project||busy||draftLoading} onClick={onOpenAlternatives}>Saved results</button></div>
       <dialog ref={toolsDialog} className="conversation-tools-dialog" aria-labelledby="conversation-tools-title" onCancel={e=>{e.preventDefault();setToolsOpen(false)}}><header><div><h2 id="conversation-tools-title">Creative tools</h2><p>Choose a tool. Your conversation stays where you left it.</p></div><button type="button" onClick={()=>setToolsOpen(false)} aria-label="Close creative tools">Close</button></header><nav aria-label="Creative tool categories">{[['styles','Brand styles'],['batch','Variations'],['commands','Command guide']].map(([id,label])=><button key={id} type="button" aria-pressed={toolTab===id} onClick={()=>setToolTab(id)}>{label}</button>)}</nav>
       <div hidden={toolTab!=='styles'}>      {project&&<BrandPresets key={project.id} projectId={project.id} referenceImageId={savedDraft.referenceImageId} disabled={busy||sending||draftLoading||uploadingReference} onUse={preset=>{const text=[savedDraft.text,`Style instructions (${preset.name}): ${preset.instructions}`].filter(Boolean).join('\n\n');if(text.length>3000){setConversationError('Your message plus this preset exceeds 3000 characters. Shorten the message first.');return;}onDraftChange(previous=>({...previous,text,referenceImageId:preset.referenceImageId||previous.referenceImageId}));setToolsOpen(false);composer.current?.focus()}}/>}
 {!project&&<p>Open a video project to manage brand styles.</p>}</div>
       <div hidden={toolTab!=='batch'}>      {project&&<BatchVariations key={project.id} projectId={project.id} revision={project.activeRevisionId} start={start} end={end} quality={quality} referenceImageId={savedDraft.referenceImageId} disabled={busy||sending||draftLoading||uploadingReference} onResults={()=>{setToolsOpen(false);onOpenAlternatives()}}/>}
 {!project&&<p>Open a video project to prepare variations.</p>}</div>
-      <div hidden={toolTab!=='commands'}>      <section className="conversation-command-menu"><h3>What can I ask?</h3><p>Choose a starting phrase, then send it to review a confirmation card.</p><div>{Object.entries(EDITOR_WORKFLOWS).map(([key,w])=><button type="button" key={key} disabled={busy||sending} onClick={()=>{setDraft(w.command);setToolsOpen(false);document.getElementById('conversation-input')?.focus()}}>{w.title}</button>)}</div></section>
+      <div hidden={toolTab!=='commands'}>      <section className="conversation-command-menu"><h3>What can I ask?</h3><p>Choose a starting phrase, then send it to review a confirmation card.</p><div>{Object.entries({...EDITOR_WORKFLOWS,...LOCAL_TOOLS}).map(([key,w])=><button type="button" key={key} disabled={busy||sending} onClick={()=>{setDraft(w.command);setToolsOpen(false);document.getElementById('conversation-input')?.focus()}}>{w.title}</button>)}</div></section>
 </div></dialog>
       <form className="conversation-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
         <input ref={referenceInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void attachReference(file)}}/>

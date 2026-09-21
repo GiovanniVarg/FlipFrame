@@ -6,10 +6,11 @@ export function reconcileBilling(state,jobId,{actualUsd,outcome,evidence}) {
  if(!Number.isFinite(actualUsd)||actualUsd<0||actualUsd>100000)throw new Error('Enter the actual nonnegative USD charge from billing');
  if(!['completed','failed','nsfw','canceled','not-submitted'].includes(outcome))throw new Error('A verified terminal provider outcome is required');
  if(typeof evidence!=='string'||evidence.trim().length<10||evidence.length>1000)throw new Error('Record the billing/request evidence, without secrets');
- const hold=job.quote?.reservedUsd||0;
+ const hold=job.generation?.reservationReleased?0:(job.quote?.reservedUsd||0);
  if(!Number.isFinite(hold)||hold<0||state.spend.reserved+1e-8<hold)throw new Error('Ledger hold mismatch; inspect before changing billing');
  state.spend={...state.spend,spent:Math.round((state.spend.spent+actualUsd)*1e8)/1e8,reserved:Math.max(0,Math.round((state.spend.reserved-hold)*1e8)/1e8)};
  job.reconciliation={actualUsd,outcome,evidence:evidence.trim(),at:new Date().toISOString()};
+ if(job.generation)job.generation.reservationReleased=true;
  job.billing='Actual charge reconciled';
  if(job.status==='unknown'){job.status='reconciled';job.phase='Provider outcome verified by operator';}
  return job;

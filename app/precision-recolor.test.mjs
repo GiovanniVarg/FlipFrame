@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {precisionRecolor} from './precision-recolor.mjs';import {buildEditPlan} from './conversation.mjs';
+test('explicit paint colors use a deterministic local plan',()=>{const p={activeRevisionId:'r',duration:5,width:1280,height:720};const plan=buildEditPlan(p,{baseRevisionId:'r',text:'Change the yellow body paint to cobalt blue',start:2,end:3},{action:'object'});assert.equal(plan.route.kind,'local');assert.equal(plan.operation,'recolor');assert.equal(plan.recolor.target,'#0047ab');assert.equal(plan.action,'object');});
+test('ambiguous or non-color requests do not infer paint parameters',()=>{for(const t of ['make the car blue','replace the yellow car with a blue truck','repaint blue','paint red blue green','repaint yellow to blue and remove the wheels'])assert.equal(precisionRecolor(t),null);});
+
+test('incomplete recolor never becomes a paid generation',()=>{const plan=buildEditPlan({activeRevisionId:'r',duration:5},{baseRevisionId:'r',text:'repaint the car blue',start:0,end:5},{action:'object'});assert.equal(plan.action,'clarify');assert.equal(plan.route.kind,'local');});

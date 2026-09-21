@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {transformationRequest} from './transformation-request.mjs';
+test('replacement recovery preserves intent and requests source camera without claiming a guarantee',()=>{const text=transformationRequest('Turn the toy car into a walking robot');assert.match(text,/walking robot/);assert.match(text,/Preserve the source camera/);assert.match(text,/not guaranteed/);assert.throws(()=>transformationRequest(''));assert.throws(()=>transformationRequest('a'.repeat(1801)));});

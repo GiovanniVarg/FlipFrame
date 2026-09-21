@@ -121,3 +121,5 @@ test('correction drafts retain scoped protection and reject foreign candidates',
  assert.throws(()=>fixture().service.write('p','alice',input({editor:{repairCandidateId:'foreign'}})));
  assert.throws(()=>fixture().service.write('p','alice',input({editor:{protectedAreas:[[[2,0],[1,0],[1,1]]]}})));
 });
+
+test('named object selections survive reload independently and reject nested or duplicate entries',()=>{const f=fixture();const a={name:'Car',start:1,end:3,scope:'range',masks:[{time:1,points:polygon},{time:2,points:polygon}],visibleRanges:[],gaps:[]};const b={...a,name:'Plant'};const saved=f.service.write('p','alice',input({editor:{objectName:'Car',objectSelections:[a,b]}}));assert.deepEqual(saved.editor.objectSelections,[a,b]);saved.editor.objectSelections[0].masks[0].points[0][0]=.9;assert.equal(f.service.read('p','alice').editor.objectSelections[0].masks[0].points[0][0],.1);assert.throws(()=>f.service.write('p','alice',{...input({editor:{objectSelections:[a,a]}}),expectedVersion:1}),/unique/);assert.throws(()=>f.service.write('p','alice',{...input({editor:{objectSelections:[{...a,objectSelections:[]}]}}),expectedVersion:1}),/unsupported/);});

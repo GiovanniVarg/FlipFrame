@@ -23,3 +23,5 @@ test('HTTP library gates owners and persists metadata across service restart',as
   const restored=JSON.parse(persisted);const lib=createCandidateLibrary({db:restored,save(){},getProject:()=>restored.projects.p});assert.equal(lib.list('p','owner')[0].favorite,true);assert.equal(lib.list('p','owner')[0].name,'Favorite take');
  }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+test('an undone candidate remains comparable without applying the revision twice',()=>{const {db,lib}=fixture();db.projects.p.revisions.push({id:'a'});const a=lib.list('p','owner').find(c=>c.id==='a');assert.equal(a.canApply,false);assert.equal(a.canCompare,true);assert.equal(lib.list('p','owner').find(c=>c.id==='b').canCompare,false);});

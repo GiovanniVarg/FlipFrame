@@ -15,3 +15,5 @@ test('a supplied reference requires human review, not an invented match score',(
 });
 
 test('tracking warnings remain review-only and include timestamps',()=>{const checks=qualityChecks({repairVerification:{pipeline:'adaptive-object-repair-v1',verifiedFrames:30,editedFrames:30,outsideCoverage:'preserved',qualityDiagnostics:{flaggedFrames:2,warnings:[{seconds:1.2}]}}});const flag=checks.find(c=>c.id==='tracking-flags');assert.equal(flag.status,'review');assert.match(flag.detail,/1.20s/);assert.match(flag.detail,/not a measured accuracy/)});
+
+test('new transformation modes require complete preservation evidence',()=>{for(const pipeline of ['scene-replacement-v1','foreground-transfer-v1']){assert.equal(qualityChecks({transformationVerification:{pipeline}}).some(c=>c.status==='verified'),false);assert.equal(qualityChecks({transformationVerification:{pipeline,outsideCoverage:'preserved',verifiedFrames:151,editedFrames:75}}).some(c=>c.status==='verified'),true);}});

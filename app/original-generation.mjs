@@ -1,3 +1,4 @@
+import {releaseProviderFailure} from './provider-refunds.mjs';
 import fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {reserve} from './budget.mjs';
@@ -26,10 +27,11 @@ export function createOriginalService({db,save,adapter,mediaPath,mediaUrl,runMed
  if(!d.provider){if(!d.submitting&&Date.now()-Date.parse(d.quote?.quotedAt||'')>300000){db.spend.reserved=Math.max(0,db.spend.reserved-d.hold);d.hold=0;d.status='review';d.error='The cost review expired while queued. Review the amount and generate again; no request was submitted.';save();return safe(d);}if(d.submitting){d.status='unknown';throw new Error('Provider acceptance is uncertain. Check its request history; do not generate again.');}d.submitting=true;save();d.provider=await adapter.submitGeneration(request(d));save();}
  if(d.provider.status==='failed'&&!d.provider.requestId){db.spend.reserved=Math.max(0,db.spend.reserved-d.hold);d.hold=0;save();}
  for(let i=0;['queued','in_progress','running'].includes(d.provider.status)&&i<300;i++){await pause();d.provider=await adapter.pollGeneration(d.provider);save();}
+ releaseProviderFailure(db,d,d.provider);
  if(d.provider.status!=='completed'){if(d.provider.status==='unknown')d.status='unknown';throw new Error(d.provider.error||'Generation has not completed. Resume the existing request; do not submit again.');}
  d.phase='Preparing your editable timeline';save();
  let p=Object.values(db.projects).find(p=>p.originalGenerationId===d.id);
- if(!p){const target=mediaPath(d.id+'-download');await download(d.provider.outputUrl,target);p=await importProject({path:target,originalname:'Generated video.mp4',size:fs.statSync(target).size},d.ownerId,{originalGenerationId:d.id,originalPrompt:d.input.prompt});}
+ if(!p){const target=d.rawPath||mediaPath(d.id+'-download');if(!d.rawDownloaded||!fs.existsSync(target)){storageAvailable();await download(d.provider.outputUrl,target);d.rawPath=target;d.rawDownloaded=true;save();}const imported=mediaPath(d.id+'-import');storageAvailable(fs.statSync(target).size);fs.copyFileSync(target,imported);p=await importProject({path:imported,originalname:'Generated video.mp4',size:fs.statSync(imported).size},d.ownerId,{originalGenerationId:d.id,originalPrompt:d.input.prompt});}
  d.projectId=p.id;d.status='completed';d.phase='Your video is ready to edit';delete d.error;save();
  }catch(e){if(d.status!=='unknown')d.status='failed';d.error=e.message;save();}return safe(d)})}
  };

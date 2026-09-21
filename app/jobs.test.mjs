@@ -6,3 +6,5 @@ test('only accepted provider work can be recovered without a new submission',()=
 test('known accepted ID can reconcile an unknown response',()=>{assert.equal(recoverable({status:'unknown',generation:{},providerState:{status:'unknown',requestId:'known',statusUrl:'https://api.higgsfield.ai/requests/known/status'}}),true)});
 
 test('saved candidates expose their actual interval for review',()=>{const j=publicJob({id:'j',result:{id:'c',url:'/media/c.mp4'},generation:{start:1,end:4,operation:'picture'}});assert.equal(j.result.start,1);assert.equal(j.result.end,4);assert.equal(j.result.operation,'picture')});
+
+test('incomplete completed output cannot advertise a recovery that adds missing frames',()=>{assert.equal(recoverable({status:'failed',failureCode:'OUTPUT_TOO_SHORT',generation:{},providerState:{requestId:'r',status:'completed'}}),false)});

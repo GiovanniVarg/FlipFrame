@@ -19,6 +19,11 @@ test('conversation plans persist, isolate owners and execute local edits once',a
   const stale=await call(route+'/plans/'+plan.id+'/execute',{baseRevisionId:j.result.id},a);assert.equal(stale.status,200);assert.equal((await stale.json()).job.id,j.id,'Completed job is not replayed after revision change');
   const undo=await(await call(route,{...input,text:'undo',baseRevisionId:j.result.id,idempotencyKey:'chat-undo-test-1'},a)).json();const undone=await(await call(route+'/plans/'+undo.plans.at(-1).id+'/execute',{baseRevisionId:j.result.id},a)).json();assert.equal(undone.project.activeRevisionId,p.activeRevisionId);
   const replay=await(await call(route+'/plans/'+ap.id+'/execute',{baseRevisionId:p.activeRevisionId,candidateId:j.result.id},a)).json();assert.equal(replay.project.activeRevisionId,p.activeRevisionId,'Idempotent reply reflects current project');
+  const trimReply=await(await call(route,{...input,text:'trim selected range',start:1,end:3,idempotencyKey:'chat-trim-test'},a)).json();const tp=trimReply.plans.at(-1);assert.equal(tp.tool,'trim');
+  const tj=await(await call(route+'/plans/'+tp.id+'/execute',{baseRevisionId:p.activeRevisionId},a)).json();assert.ok(tj.job,JSON.stringify(tj));
+  let trimmed;for(let i=0;i<600;i++){trimmed=await(await call('/api/jobs/'+tj.job.id,undefined,a)).json();if(['completed','failed'].includes(trimmed.status))break;await new Promise(r=>setTimeout(r,150));}assert.equal(trimmed.status,'completed',JSON.stringify(trimmed));assert.equal(trimmed.result.mediaMetadata.duration,2);
+  const appliedTrim=await(await call('/api/projects/'+p.id+'/apply',{candidateId:trimmed.result.id,baseRevisionId:p.activeRevisionId},a)).json();assert.equal(appliedTrim.duration,2);
+  const restored=await(await call('/api/projects/'+p.id+'/undo',{},a)).json();assert.equal(restored.duration,p.duration);assert.equal(restored.activeRevisionId,p.activeRevisionId);
   assert.equal((await(await call('/api/capabilities',undefined,a)).json()).budget.reserved,0);
  }finally{child.kill();await new Promise(r=>child.once('exit',r));assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:300});}
 });

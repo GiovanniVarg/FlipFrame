@@ -1,3 +1,7 @@
+import {registerGenerationLibrary} from './generation-library.mjs';
+import {registerTransformationRoutes} from './transformation.mjs';
+import {LOCAL_TOOLS,localParameters} from './local-tools.mjs';
+import {repairProgress} from './repair-progress.mjs';
 import {registerBatches} from './batch-variations.mjs';
 import {registerReviewNotes} from './review-notes.mjs';
 import {registerCandidateComparison} from './candidate-comparison.mjs';
@@ -45,12 +49,12 @@ const projectById=(key,owner)=>ownedProject(db,key,owner);
 const publicProject=p=>({...p,revisions:p.revisions.map(({path,...r})=>r),sourcePath:undefined});
 const asyncRoute=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
 let mediaBusy=false,providerBusy=false;
-export function runMedia(request){return new Promise((resolve,reject)=>{
+export function runMedia(request,onProgress){return new Promise((resolve,reject)=>{
  const file=path.join(DATA,'request-'+id()+'.json');fs.writeFileSync(file,JSON.stringify(request));
  const segment=['segment','segment_video'].includes(request.action);const segPython=process.env.SEGMENTATION_PYTHON||path.join(ROOT,'.segmentation-env',process.platform==='win32'?'Scripts/python.exe':'bin/python');
- const child=spawn(segment||request.action==='object_repair'?segPython:process.env.PYTHON||'python',request.action==='object_repair'?[path.join(ROOT,'object_repair.py'),file]:segment?[path.join(ROOT,'segmentation.py')]:[path.join(ROOT,'media_engine.py'),file],{cwd:ROOT,windowsHide:true});if(segment){child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({...request,operation:request.action==='segment_video'?'video':'frame',polygon:request.points}));}
- let stdout='',stderr='';const killTree=()=>{if(process.platform==='win32')spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();};const timer=setTimeout(()=>{killTree();reject(new Error('Media processing exceeded the 10 minute limit.'));},600000);
- child.stdout.on('data',b=>{stdout+=b;if(stdout.length>12000000)killTree();});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-8000);});
+ const child=spawn(segment||['object_repair','precision_recolor','deterministic','transformation','transformation_track'].includes(request.action)?segPython:process.env.PYTHON||'python',['transformation','transformation_track'].includes(request.action)?[path.join(ROOT,'transformation_engine.py'),file]:request.action==='deterministic'?[path.join(ROOT,'local_edit.py'),file]:request.action==='precision_recolor'?[path.join(ROOT,'precision_recolor.py'),file]:request.action==='object_repair'?[path.join(ROOT,'object_repair.py'),file]:segment?[path.join(ROOT,'segmentation.py')]:[path.join(ROOT,'media_engine.py'),file],{cwd:ROOT,windowsHide:true});if(segment){child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({...request,operation:request.action==='segment_video'?'video':'frame',polygon:request.points}));}
+ let stdout='',stderr='',progressBuffer='';const killTree=()=>{if(process.platform==='win32')spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();};const timer=setTimeout(()=>{killTree();reject(new Error('Media processing exceeded the 10 minute limit.'));},600000);
+ child.stdout.on('data',b=>{stdout+=b;if(stdout.length>12000000)killTree();});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-8000);if(onProgress){progressBuffer+=b;const lines=progressBuffer.split('\n');progressBuffer=lines.pop().slice(-1000);for(const line of lines){const phase=repairProgress(line);if(phase)onProgress(phase);}}});
  child.on('error',e=>{clearTimeout(timer);fs.rmSync(file,{force:true});reject(e);});
  child.on('close',code=>{if(segment&&code)console.warn('Segmentation worker exit',code,stderr);clearTimeout(timer);fs.rmSync(file,{force:true});try{const result=JSON.parse(stdout.trim());if(code||result.error||(!segment&&!result.ok))throw new Error(result.error||'Media processing failed');resolve(result);}catch(e){reject(new Error(e.message==='Unexpected end of JSON input'?'Media engine failed. Check Python dependencies.':e.message));}});
 });}
@@ -89,6 +93,7 @@ app.get('/api/capabilities',asyncRoute(async(req,res)=>{
  res.json({...capabilities,segmentation,tracking:true,motionTracking:true,automaticReidentification:true,appearanceMatching:true,budget:{limit:Number(process.env.HIGGSFIELD_TEST_BUDGET_USD||0),perRequestEstimateLimit:5,...db.spend},mode:MODE});
 }));
 registerProjectDraftRoutes(app,{db,save,getProject:projectById});
+registerGenerationLibrary(app,{db,asyncRoute});
 app.get('/api/projects',(req,res)=>res.json(Object.values(db.projects).filter(p=>p.ownerId===req.user.id&&!p.deletedAt).map(publicProject)));
 app.get('/api/projects/:id',asyncRoute(async(req,res)=>res.json(publicProject(projectById(req.params.id,req.user.id)))));
 registerMarkerRoutes(app,{db,save,getProject:projectById,id});
@@ -123,9 +128,9 @@ async function drainQueue(){
  if(!providerBusy){const cloud=Object.values(db.jobs).find(j=>j.status==='queued'&&j.generation);if(cloud){providerBusy=true;cloud.status='running';save();void generationRunner.run(cloud).finally(()=>{providerBusy=false;scheduleQueue();});}}
  if(mediaBusy)return;const job=Object.values(db.jobs).find(j=>j.status==='queued'&&j.workRequest);if(!job)return;
  mediaBusy=true;job.status='running';if(job.workRequest.request.action==='object_repair')job.phase=OBJECT_REPAIR_PHASE;save();
- try{const result=await runMedia(job.workRequest.request);
+ try{const result=await runMedia(job.workRequest.request,phase=>{job.phase=phase;});
   if(['track','segment'].includes(job.workRequest.kind)){job.result={...result,baseRevisionId:job.workRequest.baseRevisionId};}
-  else{const input=job.workRequest.request;const candidate={id:job.workRequest.candidateId,projectId:job.projectId,baseRevisionId:job.workRequest.baseRevisionId,url:mediaUrl(input.output),path:input.output,start:input.start,end:input.end,operation:input.operation,...(input.repairSourceCandidateId?{repairSourceCandidateId:input.repairSourceCandidateId,protectedAreas:input.protectedAreas,...(input.referenceImageId?{referenceImage:ownedReference(db,job.projectId,input.referenceImageId)}:{})}:{}),label:input.operation==='object'?'Object repair':input.operation==='picture'?'Picture repair':'Audio edit',createdAt:new Date().toISOString(),note:result.note,...(input.action==='object_repair'?{repairVerification:verifiedObjectRepair(result)}:{}),...(input.reviewOutput?{maskReviewUrl:mediaUrl(input.reviewOutput)}:{})};db.candidates[candidate.id]=candidate;const {path:_,...safe}=candidate;job.result=safe;}
+  else{const input=job.workRequest.request;const candidate={id:job.workRequest.candidateId,projectId:job.projectId,baseRevisionId:job.workRequest.baseRevisionId,url:mediaUrl(input.output),path:input.output,start:input.start,end:input.end,operation:input.operation,...(input.repairSourceCandidateId?{repairSourceCandidateId:input.repairSourceCandidateId,protectedAreas:input.protectedAreas,...(input.referenceImageId?{referenceImage:ownedReference(db,job.projectId,input.referenceImageId)}:{})}:{}),...(result.mediaMetadata?{mediaMetadata:result.mediaMetadata}:{}),...(result.sourceFrames?{sourceFrames:result.sourceFrames}:{}),...(result.localVerification?{localVerification:result.localVerification}:{}),...(result.transformationVerification?{transformationVerification:result.transformationVerification}:{}),...(result.precisionVerification?{precisionVerification:result.precisionVerification}:{}),label:input.action==='transformation'?(input.mode==='scene'?'Scene replacement':input.mode==='foreground'?'Foreground transfer':'Object transformation'):input.action==='deterministic'?LOCAL_TOOLS[input.tool].title:input.action==='precision_recolor'?'Precision paint recolor':input.operation==='object'?'Object repair':input.operation==='picture'?'Picture repair':'Audio edit',createdAt:new Date().toISOString(),note:result.note,...(input.action==='object_repair'?{repairVerification:verifiedObjectRepair(result)}:{}),...(input.reviewOutput?{maskReviewUrl:mediaUrl(input.reviewOutput)}:{})};db.candidates[candidate.id]=candidate;const {path:_,...safe}=candidate;job.result=safe;}
   job.status='completed';job.phase='Ready to review';delete job.error;
  }catch(e){job.status='failed';job.error=e.message;if(job.workRequest?.request?.output)fs.rmSync(job.workRequest.request.output,{force:true});}finally{mediaBusy=false;save();scheduleQueue();}
 }
@@ -136,6 +141,7 @@ function queueLocal(p,workRequest,planId){
  const job={id:id(),projectId:p.id,status:'queued',createdAt:new Date().toISOString(),workRequest,conversationPlanId:planId};db.jobs[job.id]=job;save();scheduleQueue();return job;
 }
 function enqueue(p,workRequest,res){res.status(202).json(publicJob(queueLocal(p,workRequest)));}
+registerTransformationRoutes(app,{db,projectById,asyncRoute,enqueue,mediaPath,id,candidateCapacity});
 app.get('/api/projects/:id/jobs',asyncRoute(async(req,res)=>{const p=projectById(req.params.id,req.user.id);res.json(Object.values(db.jobs).filter(j=>j.projectId===p.id).map(publicJob).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)));}));
 app.get('/api/trash',(req,res)=>res.json(Object.values(db.projects).filter(p=>p.ownerId===req.user.id&&p.deletedAt).map(publicProject)));
 app.post('/api/projects/:id/trash',asyncRoute(async(req,res)=>{const p=projectById(req.params.id,req.user.id);if(Object.values(db.jobs).some(j=>j.projectId===p.id&&['running','queued','unknown'].includes(j.status)))throw new Error('Finish or reconcile pending work before moving this project to trash.');p.deletedAt=new Date().toISOString();save();res.json({ok:true});}));
@@ -159,7 +165,7 @@ app.post('/api/projects/:id/segment',asyncRoute(async(req,res)=>{
 }));
 app.get('/api/projects/:id/candidates/:candidateId/repair',asyncRoute(async(req,res)=>{
  const p=projectById(req.params.id,req.user.id),g=repairSource(db,p,req.params.candidateId,fs.existsSync);
- res.json({start:g.start,end:g.end,scope:g.scope||'range',protectedAreas:db.candidates[req.params.candidateId].protectedAreas||[],baseRevisionId:p.activeRevisionId});
+ res.json({start:g.start,end:g.end,scope:g.scope||'range',masks:g.masks||[],visibleRanges:g.visibleRanges||[],protectedAreas:db.candidates[req.params.candidateId].protectedAreas||[],baseRevisionId:p.activeRevisionId});
 }));
 app.post('/api/projects/:id/candidates/:candidateId/repair',asyncRoute(async(req,res)=>{
  const p=projectById(req.params.id,req.user.id);
@@ -210,6 +216,24 @@ function queueGeneration(p,input,referenceImagePath,referenceImageId,{deferCommi
 }
 app.post('/api/projects/:id/generate',(req,res)=>{projectById(req.params.id,req.user.id);res.status(409).json({error:'Create and review a conversation plan before generation. Direct generation is disabled.'});});
 const conversation=createConversationService({db,save,getProject:projectById,classify:classifyEdit,configured:()=>Boolean(process.env.TYPESAFE_API_KEY),execute:async(p,plan,input)=>{
+ if(plan.route.id==='deterministic'){
+  const tool=LOCAL_TOOLS[plan.tool];if(!tool)throw Error('Unsupported deterministic edit');
+  const params=localParameters(plan.tool,plan.instruction);
+  const edit=validateEdit(p,{baseRevisionId:plan.baseRevisionId,start:plan.start,end:plan.end,operation:tool.mask?'object':'mute',masks:input.masks,scope:input.scope,visibleRanges:input.visibleRanges});
+  if(tool.mask&&!input.reviewed)throw Error('Review the tracked region first.');
+  if(tool.corners&&input.masks.some(m=>m.points.length!==4))throw Error('Draw four ordered screen corners and track that polygon. SAM object outlines cannot define a screen plane.');
+  let reference;if(tool.reference){if(!plan.referenceImage)throw Error('Attach the image to place.');ownedReference(db,p.id,plan.referenceImage.id);reference=db.assets[plan.referenceImage.id].path;}
+  candidateCapacity(p.id);
+  const active=p.revisions.find(r=>r.id===p.activeRevisionId);
+  const request={...edit,action:'deterministic',tool:plan.tool,params,reference,splitTimes:active.mediaMetadata?.splitTimes||[],source:active.path,output:mediaPath(id(),'mkv')};
+  return {job:publicJob(queueLocal(p,{kind:'render',baseRevisionId:p.activeRevisionId,candidateId:id(),request},plan.id))};
+ }
+ if(plan.operation==='recolor'&&plan.route.id==='precision-recolor'){
+  if(!input.reviewed)throw Error('Review the tracked surface before recoloring.');
+  const edit=validateEdit(p,{baseRevisionId:plan.baseRevisionId,start:plan.start,end:plan.end,operation:'object',masks:input.masks,scope:input.scope,visibleRanges:input.visibleRanges});candidateCapacity(p.id);
+  const request={...edit,action:'precision_recolor',recolor:plan.recolor,source:p.revisions.find(r=>r.id===p.activeRevisionId).path,output:mediaPath(id(),'mkv')};
+  return {job:publicJob(queueLocal(p,{kind:'render',baseRevisionId:p.activeRevisionId,candidateId:id(),request},plan.id))};
+ }
  if(plan.route.kind==='higgsfield'){
   if(plan.route.estimatedUsd>5)throw new Error('Shorten the selected interval or request a new Draft plan.');
   if(!adapter.capabilities().higgsfieldVideo)throw new Error('Higgsfield credentials are not configured on the server.');
