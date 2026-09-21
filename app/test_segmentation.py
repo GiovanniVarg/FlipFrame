@@ -65,7 +65,12 @@ class SegmentationTests(unittest.TestCase):
                 cv2.ellipse(frame,(100+offset,125),(30,75),0,0,360,(220,230,235),-1)
                 writer.write(frame)
             writer.release()
-            result=segment_video(str(path),0,1,[[.27,.12],[.58,.12],[.58,.86],[.27,.86]],reference_time=1/3)
+            from unittest.mock import patch
+            updates=[]
+            with patch('segmentation.report_progress', side_effect=lambda completed,total,stage='tracking': updates.append((completed,total,stage))):
+                result=segment_video(str(path),0,1,[[.27,.12],[.58,.12],[.58,.86],[.27,.86]],reference_time=1/3)
+            self.assertEqual([u[:2] for u in updates if u[2]=='tracking'],[(1,3),(2,3),(3,3)])
+            self.assertIn((0,3,'preparing'),updates)
             self.assertEqual(result['frameCount'],3)
             self.assertFalse(result['sparseSamples'])
             self.assertEqual(len(result['masks']),3)

@@ -9,6 +9,9 @@ CHECKPOINT = pathlib.Path(os.environ.get('SAM2_CHECKPOINT', str(ROOT / '.segment
 CONFIG = 'configs/sam2.1/sam2.1_hiera_t.yaml'
 _PREDICTOR = None
 
+def report_progress(completed, total, stage='tracking'):
+    print('FLIPFRAME_PROGRESS '+json.dumps({'completed':completed,'total':total,'stage':stage}), file=sys.stderr, flush=True)
+
 def validate_polygon(polygon):
     points = np.asarray(polygon, dtype=np.float32)
     if points.ndim != 2 or points.shape[1] != 2 or not 3 <= len(points) <= 256 or not np.isfinite(points).all():
@@ -143,7 +146,7 @@ def summarize_masks(predictions, fps):
         if present: accepted.append(prediction)
     return {'masks':accepted,'visibleRanges':visible,'gaps':gaps,'status':'partial' if gaps else 'complete'}
 
-def segment_video(source, start, end, polygon, sample_fps=None, reference_time=None, clicks=None):
+def segment_video(source, start, end, polygon, sample_fps=None, reference_time=None, clicks=None, temp_directory=None):
     """Propagate one prompted object at native FPS through <=10s and <=300 frames.
     This operates within one shot; cut/re-entry identity matching belongs to tracking.
     """
@@ -159,7 +162,8 @@ def segment_video(source, start, end, polygon, sample_fps=None, reference_time=N
     selection_prompts(polygon, 2, 2, clicks)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     torch.set_num_threads(min(8, torch.get_num_threads()))
-    with tempfile.TemporaryDirectory(prefix='sam2-frames-') as folder:
+    report_progress(0, 0, 'preparing')
+    with tempfile.TemporaryDirectory(prefix='sam2-frames-', dir=temp_directory) as folder:
         cap = cv2.VideoCapture(str(path.resolve()))
         times = []
         try:
@@ -169,6 +173,7 @@ def segment_video(source, start, end, polygon, sample_fps=None, reference_time=N
             last=min(int(count),int(math.ceil(end*fps-1e-7)))
             if last <= first: raise ValueError('Interval contains no native frames')
             if last-first > 300: raise ValueError('Propagation exceeds 300 native frames; shorten the selected interval')
+            report_progress(0, last-first, 'preparing')
             cap.set(cv2.CAP_PROP_POS_FRAMES,first)
             for frame_index in range(first,last):
                 timestamp=frame_index/fps
@@ -205,6 +210,7 @@ def segment_video(source, start, end, polygon, sample_fps=None, reference_time=N
                     masks.append({'time':times[index],'points':points,'confidence':None,'visible':True,'reviewRequired':True,'method':'sam2.1-video-tiny'})
                 except ValueError:
                     masks.append({'time':times[index],'points':[],'confidence':None,'visible':False,'reviewRequired':True,'method':'sam2.1-video-tiny'})
+                report_progress(len(seen), len(times))
         masks.sort(key=lambda item:item["time"])
         if len(masks)!=len(times): raise ValueError("SAM2 did not process every selected frame; previous masks retained")
         return {**summarize_masks(masks,fps),'method':'sam2.1-video-tiny','genuineSegmentation':True,'device':device,'reviewRequired':True,'requiresReview':True,'reviewed':False,'fps':fps,'sparseSamples':False,'frameCount':len(times),'start':times[0],'end':last/fps,'identityAcrossCuts':False,'note':'Actual SAM2 masks on every native frame. Empty predictions remain gaps. No identity guarantee across cuts; review every mask. Video confidence is unavailable rather than fabricated.'}
@@ -212,10 +218,12 @@ def segment_video(source, start, end, polygon, sample_fps=None, reference_time=N
 if __name__ == '__main__':
     try:
         payload = json.loads(sys.stdin.read())
+        report_progress(0, 0 if payload.get('operation') == 'video' else 1, 'preparing')
         if payload.get('operation') == 'video':
-            result = segment_video(payload['source'],payload['start'],payload['end'],payload.get('polygon'),payload.get('sampleFps',3),payload.get('time'),payload.get('clicks'))
+            result = segment_video(payload['source'],payload['start'],payload['end'],payload.get('polygon'),payload.get('sampleFps',3),payload.get('time'),payload.get('clicks'),payload.get('tempDirectory'))
         else:
             result = segment_frame(payload['source'], payload['time'], payload.get('polygon'), payload.get('clicks'))
+            report_progress(1, 1)
         print(json.dumps(result))
     except Exception as error:
         print(json.dumps({'error': str(error)}))

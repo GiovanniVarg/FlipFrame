@@ -1,6 +1,7 @@
 import {registerGenerationLibrary} from './generation-library.mjs';
 import {registerTransformationRoutes} from './transformation.mjs';
 import {LOCAL_TOOLS,localParameters} from './local-tools.mjs';
+import {collectWorker,trackingProgress,cancellableLocal,canceledError} from './tracking-progress.mjs';
 import {repairProgress} from './repair-progress.mjs';
 import {registerBatches} from './batch-variations.mjs';
 import {registerReviewNotes} from './review-notes.mjs';
@@ -49,15 +50,27 @@ const projectById=(key,owner)=>ownedProject(db,key,owner);
 const publicProject=p=>({...p,revisions:p.revisions.map(({path,...r})=>r),sourcePath:undefined});
 const asyncRoute=fn=>(req,res,next)=>Promise.resolve(fn(req,res)).catch(next);
 let mediaBusy=false,providerBusy=false;
-export function runMedia(request,onProgress){return new Promise((resolve,reject)=>{
- const file=path.join(DATA,'request-'+id()+'.json');fs.writeFileSync(file,JSON.stringify(request));
- const segment=['segment','segment_video'].includes(request.action);const segPython=process.env.SEGMENTATION_PYTHON||path.join(ROOT,'.segmentation-env',process.platform==='win32'?'Scripts/python.exe':'bin/python');
- const child=spawn(segment||['object_repair','precision_recolor','deterministic','transformation','transformation_track'].includes(request.action)?segPython:process.env.PYTHON||'python',['transformation','transformation_track'].includes(request.action)?[path.join(ROOT,'transformation_engine.py'),file]:request.action==='deterministic'?[path.join(ROOT,'local_edit.py'),file]:request.action==='precision_recolor'?[path.join(ROOT,'precision_recolor.py'),file]:request.action==='object_repair'?[path.join(ROOT,'object_repair.py'),file]:segment?[path.join(ROOT,'segmentation.py')]:[path.join(ROOT,'media_engine.py'),file],{cwd:ROOT,windowsHide:true});if(segment){child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({...request,operation:request.action==='segment_video'?'video':'frame',polygon:request.points}));}
- let stdout='',stderr='',progressBuffer='';const killTree=()=>{if(process.platform==='win32')spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});else child.kill();};const timeoutMs=request.action==='normalize'?7200000:600000;const timer=setTimeout(()=>{killTree();reject(new Error(`Media processing exceeded the ${timeoutMs/60000} minute limit.`));},timeoutMs);
- child.stdout.on('data',b=>{stdout+=b;if(stdout.length>12000000)killTree();});child.stderr.on('data',b=>{stderr=(stderr+b).slice(-8000);if(onProgress){progressBuffer+=b;const lines=progressBuffer.split('\n');progressBuffer=lines.pop().slice(-1000);for(const line of lines){const phase=repairProgress(line);if(phase)onProgress(phase);}}});
- child.on('error',e=>{clearTimeout(timer);fs.rmSync(file,{force:true});reject(e);});
- child.on('close',code=>{if(segment&&code)console.warn('Segmentation worker exit',code,stderr);clearTimeout(timer);fs.rmSync(file,{force:true});try{const result=JSON.parse(stdout.trim());if(code||result.error||(!segment&&!result.ok))throw new Error(result.error||'Media processing failed');resolve(result);}catch(e){reject(new Error(e.message==='Unexpected end of JSON input'?'Media engine failed. Check Python dependencies.':e.message));}});
-});}
+export async function runMedia(request,onProgress,{signal}={}){
+ if(signal?.aborted)throw canceledError();
+ const file=path.join(DATA,'request-'+id()+'.json');
+ const segment=['segment','segment_video'].includes(request.action);
+ const tempDirectory=segment?fs.mkdtempSync(path.join(DATA,'sam-')):undefined;
+ const workerRequest={...request,...(tempDirectory?{tempDirectory}:{})};
+ fs.writeFileSync(file,JSON.stringify(workerRequest));
+ const segPython=process.env.SEGMENTATION_PYTHON||path.join(ROOT,'.segmentation-env',process.platform==='win32'?'Scripts/python.exe':'bin/python');
+ try{
+ const child=spawn(segment||['object_repair','precision_recolor','deterministic','transformation','transformation_track'].includes(request.action)?segPython:process.env.PYTHON||'python',['transformation','transformation_track'].includes(request.action)?[path.join(ROOT,'transformation_engine.py'),file]:request.action==='deterministic'?[path.join(ROOT,'local_edit.py'),file]:request.action==='precision_recolor'?[path.join(ROOT,'precision_recolor.py'),file]:request.action==='object_repair'?[path.join(ROOT,'object_repair.py'),file]:segment?[path.join(ROOT,'segmentation.py')]:[path.join(ROOT,'media_engine.py'),file],{cwd:ROOT,windowsHide:true,detached:process.platform!=='win32'});if(segment){child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({...workerRequest,operation:request.action==='segment_video'?'video':'frame',polygon:request.points}));}
+
+ let progressBuffer='';
+ const {stdout,code}=await collectWorker(child,{signal,timeoutMs:request.action==='normalize'?7200000:600000,onStderr(chunk){
+  progressBuffer+=chunk;const lines=progressBuffer.split('\n');progressBuffer=lines.pop().slice(-8000);
+  for(const line of lines){const progress=trackingProgress(line);const phase=progress||repairProgress(line);if(phase)onProgress?.(phase);}
+ }});
+ if(signal?.aborted)throw canceledError();
+ let result;try{result=JSON.parse(stdout.trim());}catch{throw new Error('Media engine failed. Check Python dependencies.');}
+ if(code||result.error||(!segment&&!result.ok))throw new Error(result.error||'Media processing failed');return result;
+ }finally{fs.rmSync(file,{force:true});if(tempDirectory)fs.rmSync(tempDirectory,{recursive:true,force:true});}
+}
 async function withMediaTask(request){while(mediaBusy)await new Promise(r=>setTimeout(r,100));mediaBusy=true;try{return await runMedia(request);}finally{mediaBusy=false;scheduleQueue();}}
 async function downloadProvider(url,target){const parsed=new URL(url);if(parsed.protocol!=='https:'||parsed.username||parsed.password||!['higgsfield.ai','higgsfield.app','higgsfield-cdn.com','cloudfront.net','amazonaws.com','storage.googleapis.com'].some(d=>parsed.hostname===d||parsed.hostname.endsWith('.'+d)))throw new Error('Unverified provider output host');const response=await fetch(parsed,{redirect:'error',signal:AbortSignal.timeout(120000)});if(!response.ok)throw new Error('Candidate download failed');await saveDownload(response.body,target);}
 const generationRunner=createGenerationRunner({db,save,adapter,runMedia:withMediaTask,mediaPath,mediaUrl,download:downloadProvider,budgetLimit:()=>Number(process.env.HIGGSFIELD_TEST_BUDGET_USD||0)});
@@ -122,18 +135,21 @@ app.post('/api/projects/:id/assets',upload.single('file'),asyncRoute(async(req,r
  const asset={id:key,projectId:req.params.id,path:target,url:mediaUrl(target),name:req.file.originalname};db.assets[key]=asset;save();res.json({id:key,url:asset.url,name:asset.name});
 }));
 app.get('/api/jobs/:id',(req,res)=>{const job=db.jobs[req.params.id];if(!job||db.projects[job.projectId]?.ownerId!==req.user.id)return res.status(404).json({error:'Job not found'});res.json(publicJob(job));});
+const localControllers=new Map();
 let queueScheduled=false;
 function scheduleQueue(){if(queueScheduled)return;queueScheduled=true;setTimeout(()=>{queueScheduled=false;void drainQueue();},100);}
 async function drainQueue(){
  if(!providerBusy){const original=Object.values(db.originals||{}).find(d=>d.status==='queued');if(original){providerBusy=true;void originals.run(original).finally(()=>{providerBusy=false;scheduleQueue();});}}
  if(!providerBusy){const cloud=Object.values(db.jobs).find(j=>j.status==='queued'&&j.generation);if(cloud){providerBusy=true;cloud.status='running';save();void generationRunner.run(cloud).finally(()=>{providerBusy=false;scheduleQueue();});}}
  if(mediaBusy)return;const job=Object.values(db.jobs).find(j=>j.status==='queued'&&j.workRequest);if(!job)return;
- mediaBusy=true;job.status='running';if(job.workRequest.request.action==='object_repair')job.phase=OBJECT_REPAIR_PHASE;save();
- try{const result=await runMedia(job.workRequest.request,phase=>{job.phase=phase;});
+ mediaBusy=true;job.status='running';delete job.progress;if(['segment','track'].includes(job.workRequest.kind))job.phase='Preparing video';if(job.workRequest.request.action==='object_repair')job.phase=OBJECT_REPAIR_PHASE;save();
+ const controller=new AbortController();localControllers.set(job.id,controller);
+ try{const result=await runMedia(job.workRequest.request,progress=>{if(controller.signal.aborted)return;if(typeof progress==='string')job.phase=progress;else {job.progress=progress;job.phase=progress.stage==='preparing'?'Preparing video':'Following object';}}, {signal:controller.signal});
+  if(controller.signal.aborted)throw canceledError();
   if(['track','segment'].includes(job.workRequest.kind)){job.result={...result,baseRevisionId:job.workRequest.baseRevisionId};}
   else{const input=job.workRequest.request;const candidate={id:job.workRequest.candidateId,projectId:job.projectId,baseRevisionId:job.workRequest.baseRevisionId,url:mediaUrl(input.output),path:input.output,start:input.start,end:input.end,operation:input.operation,...(input.repairSourceCandidateId?{repairSourceCandidateId:input.repairSourceCandidateId,protectedAreas:input.protectedAreas,...(input.referenceImageId?{referenceImage:ownedReference(db,job.projectId,input.referenceImageId)}:{})}:{}),...(result.mediaMetadata?{mediaMetadata:result.mediaMetadata}:{}),...(result.sourceFrames?{sourceFrames:result.sourceFrames}:{}),...(result.localVerification?{localVerification:result.localVerification}:{}),...(result.transformationVerification?{transformationVerification:result.transformationVerification}:{}),...(result.precisionVerification?{precisionVerification:result.precisionVerification}:{}),label:input.action==='transformation'?(input.mode==='scene'?'Scene replacement':input.mode==='foreground'?'Foreground transfer':'Object transformation'):input.action==='deterministic'?LOCAL_TOOLS[input.tool].title:input.action==='precision_recolor'?'Precision paint recolor':input.operation==='object'?'Object repair':input.operation==='picture'?'Picture repair':'Audio edit',createdAt:new Date().toISOString(),note:result.note,...(input.action==='object_repair'?{repairVerification:verifiedObjectRepair(result)}:{}),...(input.reviewOutput?{maskReviewUrl:mediaUrl(input.reviewOutput)}:{})};db.candidates[candidate.id]=candidate;const {path:_,...safe}=candidate;job.result=safe;}
   job.status='completed';job.phase='Ready to review';delete job.error;
- }catch(e){job.status='failed';job.error=e.message;if(job.workRequest?.request?.output)fs.rmSync(job.workRequest.request.output,{force:true});}finally{mediaBusy=false;save();scheduleQueue();}
+ }catch(e){if(controller.signal.aborted||e.name==='AbortError'){job.status='canceled';job.phase='Canceled';delete job.error;delete job.result;}else{job.status='failed';job.error=e.message;}if(job.workRequest?.request?.output)fs.rmSync(job.workRequest.request.output,{force:true});}finally{localControllers.delete(job.id);mediaBusy=false;save();scheduleQueue();}
 }
 function queueLocal(p,workRequest,planId){
  if(workRequest.request?.action==='render'&&!workRequest.request.output.endsWith('.webm'))workRequest.request.output=mediaPath(id(),'webm');
@@ -189,7 +205,7 @@ app.post('/api/projects/:id/render',asyncRoute(async(req,res)=>{
  if(['picture','object'].includes(input.operation))request.candidate=asset(input.candidateId);
  enqueue(p,{kind:'render',baseRevisionId:p.activeRevisionId,candidateId:id(),request},res);
 }));
-app.post('/api/jobs/:id/cancel',asyncRoute(async(req,res)=>{const job=db.jobs[req.params.id];if(!job||db.projects[job.projectId]?.ownerId!==req.user.id)return res.status(404).json({error:'Job not found'});if(job.provider||job.status!=='queued')return res.status(409).json({error:'Only queued local work can be cancelled. Provider acceptance is never guessed.'});job.status='canceled';save();res.json({ok:true});}));
+app.post('/api/jobs/:id/cancel',asyncRoute(async(req,res)=>{const job=db.jobs[req.params.id];if(!job||db.projects[job.projectId]?.ownerId!==req.user.id)return res.status(404).json({error:'Job not found'});if(job.status==='canceled'||job.phase==='Canceling')return res.json(publicJob(job));if(!cancellableLocal(job))return res.status(409).json({error:'Only queued local work or active object tracking can be canceled.'});if(job.status==='running'){const controller=localControllers.get(job.id);if(!controller)return res.status(409).json({error:'This worker cannot be canceled yet.'});job.phase='Canceling';controller.abort();}else {job.status='canceled';job.phase='Canceled';}save();res.json(publicJob(job));}));
 app.post('/api/projects/:id/apply',asyncRoute(async(req,res)=>{
  const p=projectById(req.params.id,req.user.id),c=db.candidates[req.body.candidateId];if(!c||c.projectId!==p.id)throw new Error('Candidate not found');if(req.body.baseRevisionId!==p.activeRevisionId)throw new Error('Project revision changed');
  db.projects[p.id]=applyCandidate(p,c);save();res.json(publicProject(db.projects[p.id]));
