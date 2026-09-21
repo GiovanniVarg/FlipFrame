@@ -74,7 +74,7 @@ def setup():
         subprocess.run([str(python), '-m', 'pip', 'install', 'torch==2.5.1', 'torchvision==0.20.1', '--index-url', 'https://download.pytorch.org/whl/cpu'], check=True)
     actual = subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip()
     if actual != REVISION: raise RuntimeError('SAM2 revision differs from audited source; review before installation')
-    subprocess.run([str(python), '-m', 'pip', 'install', 'wheel', 'setuptools>=64', 'hydra-core>=1.3.2', 'iopath>=0.1.10', 'tqdm>=4.66.1', 'opencv-python-headless==4.12.0.88'], check=True)
+    subprocess.run([str(python), '-m', 'pip', 'install', 'wheel', 'setuptools>=64', 'hydra-core>=1.3.2', 'iopath>=0.1.10', 'tqdm>=4.66.1', 'opencv-python-headless==4.12.0.88', 'imageio-ffmpeg==0.6.0'], check=True)
     environment = dict(os.environ, SAM2_BUILD_CUDA='0')
     subprocess.run([str(python), '-m', 'pip', 'install', '--no-build-isolation', '--no-deps', str(SOURCE)], check=True, env=environment)
     if not CHECKPOINT.exists():
