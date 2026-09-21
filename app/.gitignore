@@ -1,0 +1,15 @@
+node_modules/
+dist/
+data/
+.env
+python_packages/
+__pycache__/
+.npm-cache/
+test-source.mp4
+test-replacement.mp4
+
+.segmentation/
+.segmentation-env/
+
+.env.local
+.env.*.local

@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {candidateComparison} from './candidate-comparison.mjs';
+const db={candidates:{c:{projectId:'p',baseRevisionId:'old',url:'/media/edit.webm',path:'private'},other:{projectId:'q'}},projects:{p:{id:'p',ownerId:'a',activeRevisionId:'new',revisions:[{id:'old',url:'/media/original.mp4',path:'private'},{id:'new',url:'/media/new.mp4'}]}}};
+const getProject=(id,owner)=>{const p=db.projects[id];if(!p||p.ownerId!==owner)throw Error('Not found');return p};
+test('comparison uses exact base revision and excludes paths',()=>{const c=candidateComparison(db,getProject,'p','a','c');assert.equal(c.originalUrl,'/media/original.mp4');assert.equal(c.baseRevisionId,'old');assert.equal(c.path,undefined);assert.equal(JSON.stringify(c).includes('private'),false)});
+test('comparison blocks foreign owners and candidates',()=>{assert.throws(()=>candidateComparison(db,getProject,'p','b','c'));assert.throws(()=>candidateComparison(db,getProject,'p','a','other'));assert.throws(()=>candidateComparison(db,getProject,'p','a','missing'))});

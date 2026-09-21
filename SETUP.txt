@@ -1,0 +1,32 @@
+FlipFrame — development setup
+=============================
+Private source repository for the conversation-first video editor.
+
+Prerequisites: Git, Node.js 24, Python 3.10+ (Python 3.10 recommended for the supplied Windows SAM2 setup).
+
+1. git clone https://github.com/GiovanniVarg/FlipFrame.git
+2. cd FlipFrame/app
+3. npm ci
+4. python -m pip install -r requirements.txt
+5. python create-sample-source.py
+6. Copy .env.example to .env.local and fill credentials locally.
+   HF_CREDENTIALS=key-id:key-secret is the preferred Higgsfield SDK setting.
+   TYPESAFE_API_KEY is optional. Never prefix secrets with VITE_.
+   Generation is blocked until HIGGSFIELD_TEST_BUDGET_USD is explicitly positive.
+7. For local object segmentation: python setup_segmentation.py --cpu --isolated
+   This downloads model/runtime dependencies. CPU processing can be slow.
+8. npm run build
+9. npm start
+10. Open http://127.0.0.1:8780/studio
+
+Checks: npm test; npm run check:submission
+Python media checks: python -m unittest test_media_engine test_repair_quality
+SAM2 pipeline checks use the Python executable in .segmentation-env.
+
+Credentials, project databases, generated videos, dependencies and model weights
+are intentionally not in Git. This clone starts with an empty workspace.
+For existing projects, stop the server and use `node workspace-transfer.mjs backup data NEW_BACKUP_FOLDER`, then transfer
+the exported folder privately. On the new machine use `node workspace-transfer.mjs restore BACKUP_FOLDER data` before first startup (destination must not exist). Do not commit backups. Keep API keys in a password
+manager. Deployment templates are in app/deployment; public deployment remains
+unverified. Current work: reliability, tracking-quality warnings, user quotas,
+storage admission, account recovery, and browser verification.

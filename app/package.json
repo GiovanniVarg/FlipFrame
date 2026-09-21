@@ -1,0 +1,31 @@
+{
+  "name": "video-gen-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server.mjs",
+    "test": "node --test *.test.mjs",
+    "test:media": "python -m unittest discover -s . -p test_media_engine.py -v",
+    "example:seedance": "node index.ts",
+    "check:seedance": "tsc --noEmit --skipLibCheck --module nodenext --target es2022 index.ts",
+    "test:submission": "node --test submission-workflow.test.mjs",
+    "check:submission": "node submission-preflight.mjs"
+  },
+  "dependencies": {
+    "@higgsfield/client": "^0.2.6",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}

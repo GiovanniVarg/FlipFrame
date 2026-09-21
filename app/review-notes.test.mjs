@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {reviewNotes} from './review-notes.mjs';
+function setup(fail=false){const db={candidates:{c:{projectId:'p'}}};return {db,save(){if(fail)throw Error('disk')},getProject(pid,owner){if(pid!=='p'||owner!=='a')throw Error('not found');return {id:'p',duration:5}}}}
+const note={key:'review-note-key',time:2,text:'Check the edge'};
+test('timestamp notes persist and retry without duplicates',()=>{const d=setup();assert.equal(reviewNotes(d,'p','a','c',note).length,1);assert.equal(reviewNotes(d,'p','a','c',note).length,1);assert.equal(reviewNotes(d,'p','a','c')[0].time,2);assert.throws(()=>reviewNotes(d,'p','a','c',{...note,text:'different'}));});
+test('reject foreign access, invalid time and failed save',()=>{const d=setup();assert.throws(()=>reviewNotes(d,'p','b','c',note));assert.throws(()=>reviewNotes(d,'p','a','c',{...note,time:9}));const f=setup(true);assert.throws(()=>reviewNotes(f,'p','a','c',note));assert.equal(reviewNotes(f,'p','a','c').length,0)});

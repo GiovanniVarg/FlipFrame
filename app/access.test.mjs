@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {ownedProject,canReadMedia} from './access.mjs';
+const db={projects:{p:{id:'p',ownerId:'a',sourcePath:'/data/original.mp4',sourceUrl:'/media/base.mp4',thumbnailUrl:'/media/strip.jpg',revisions:[{path:'/data/base.mp4'}]}},assets:{x:{projectId:'p',path:'/data/audio.wav'}},candidates:{c:{projectId:'p',path:'/data/edit.mp4'}}};
+test('owner can read project but another user sees missing',()=>{assert.equal(ownedProject(db,'p','a').id,'p');assert.throws(()=>ownedProject(db,'p','b'),e=>e.status===404)});
+test('all media variants are owner protected, traversal and unknown rejected',()=>{for(const name of ['original.mp4','base.mp4','strip.jpg','audio.wav','edit.mp4']){assert.equal(canReadMedia(db,name,'a'),true);assert.equal(canReadMedia(db,name,'b'),false)}assert.equal(canReadMedia(db,'../base.mp4','a'),false);assert.equal(canReadMedia(db,'unknown.mp4','a'),false)});

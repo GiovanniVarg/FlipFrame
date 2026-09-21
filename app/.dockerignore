@@ -1,0 +1,21 @@
+node_modules
+dist
+data
+.env
+.env.*
+.git
+.npm-cache
+python_packages
+.segmentation-env
+models
+__pycache__
+*.mp4
+!sample-source.mp4
+*.test.mjs
+test_*.py
+
+.segmentation/
+.segmentation-env/
+
+# Public deterministic landing demonstration, not private user media.
+!public/demo/*.mp4

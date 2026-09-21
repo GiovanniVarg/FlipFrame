@@ -1,0 +1,34 @@
+services:
+  studio:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+      args:
+        INSTALL_SAM2: ${INSTALL_SAM2:-false}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_ENV: production
+      LAB_MODE: saas
+      HOST: 0.0.0.0
+      PORT: 3000
+      APP_ORIGIN: ${APP_ORIGIN:?Set the public HTTPS origin}
+      LAB_SECURE_COOKIES: "true"
+      LAB_TRUST_PROXY: "1"
+      LAB_MAX_STORAGE_BYTES: ${LAB_MAX_STORAGE_BYTES:-10737418240}
+      LAB_INVITE_CODE: ${LAB_INVITE_CODE:-}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      HF_CREDENTIALS: ${HF_CREDENTIALS:-}
+      HIGGSFIELD_API_KEY: ${HIGGSFIELD_API_KEY:-}
+      HIGGSFIELD_API_SECRET: ${HIGGSFIELD_API_SECRET:-}
+      HIGGSFIELD_TEST_BUDGET_USD: ${HIGGSFIELD_TEST_BUDGET_USD:-0}
+    volumes:
+      - studio-data:/data
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  studio-data:

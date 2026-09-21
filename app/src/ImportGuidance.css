@@ -1,0 +1,7 @@
+.import-guidance{max-width:42ch;margin:12px 0;color:var(--muted,#b4bbb5);font-size:11px;line-height:1.65;text-align:left}
+.import-guidance .import-limits{margin:0 0 5px;font-size:11px;line-height:1.65;max-width:none}
+.import-guidance summary{cursor:pointer;text-underline-offset:3px}
+.import-guidance summary:hover{text-decoration:underline}
+.import-guidance summary:focus-visible{outline:2px solid var(--yellow,#f1cc76);outline-offset:4px}
+.import-guidance details p{margin:9px 0 0;font-size:11px;line-height:1.65;max-width:none}
+.empty .import-guidance{margin:12px auto 0;max-width:46ch}

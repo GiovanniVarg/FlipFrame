@@ -1,0 +1,78 @@
+# Reliability remediation implementation plan
+
+Date: 2026-09-20
+Goal: make precise editing understandable, recoverable and measurable before widening public access.
+Architecture: retain the existing React/Express/Python pipeline. Fix transaction boundaries first; introduce narrowly scoped services instead of rewriting the editor. Preserve source media, explicit paid approval, ownership checks and ambiguous-acceptance holds.
+Stack: TypeScript/React, Node/Express, SQLite, Python/SAM2/FFmpeg.
+Spec: workspace outputs/build-audit-2026-09-20.html.
+Execution: inline implementation with focused regression tests. No paid generation, credential inspection, automatic deployment or destructive media cleanup. Existing user drafts must remain intact.
+
+## 1. Atomic batch creation — first implementation slice
+Files: app/batch-variations.mjs, app/server.mjs, app/batch-variations.test.mjs.
+- [ ] Add deferred persistence option to queueGeneration; validation and in-memory admission still occur for each item, including capacity accounting.
+- [ ] Batch creates every job with deferred persistence, attaches batchId, assigns all jobIds and saves once. Schedule only after successful save.
+- [ ] On validation/save failure restore newly created in-memory jobs and batch links without scheduling.
+- [ ] Regression tests record every persisted snapshot: no snapshot may contain a new batch job without its batch link. Failed save must leave no jobs or scheduling; repeated approval remains idempotent.
+- [ ] Verify production call sites explicitly pass deferred options and schedule callback. Run batch and submission workflow tests.
+Legacy recovery: match persisted job idempotency keys batch-<batch id>-<plan id> to reconstruct links before approval; partially recovered batches must never submit missing versions automatically. Surface existing jobs for review.
+
+## 2. Reusable batch plans
+Files: app/batch-variations.mjs and tests.
+- [ ] Allow expired unsubmitted plans to be removed during preparation; preserve every submitted batch and active plan. Count only live unsubmitted plans against 30-plan limit.
+- [ ] Test 30 expired plans permit new preparation; submitted history is retained; failed save rolls back pruning.
+
+## 3. Clear edit scope and cost approval
+Files: app/src/main.tsx; locate extracted plan-card components before editing; app/edit-impact.mjs and tests.
+- [ ] Render frame count and plain scope on approval cards: one frame, selected range, or entire clip. Derive from reviewed immutable plan, not live timeline selection.
+- [ ] Keep scope adjustment before approval; changing scope invalidates old plan and estimate. Never silently widen a selected frame.
+- [ ] Explain estimated generation charge, reserved allowance, and verified actual billing separately. Show local repairs as no new generation charge.
+- [ ] Tests cover frame boundaries, full-duration selection, stale revision and changed range. Browser check with existing draft preserved.
+
+## 4. Quality gate and evaluation
+Files: app/object_repair.py, app/object-repair-contract.mjs, app/test_repair_pipeline.py; new app/repair-quality.mjs and tests.
+- [ ] Return per-frame mask area, centroid movement, missing-mask count and coverage expansion metrics. These are diagnostics, not probability of correctness.
+- [ ] Mark missing coverage, abrupt jumps and excessive expansion as review-required using configurable thresholds calibrated on fixtures. No silent auto-apply.
+- [ ] Separate outside-coverage preservation proof from semantic quality in candidate review.
+- [ ] Create evaluation manifest covering thin objects, blur, occlusion, similar objects, clothing and camera motion. Reuse existing media first; new paid examples require remaining authorized allowance and explicit cost review.
+- [ ] Pass: decoded outside-coverage pixels unchanged; suspicious fixtures produce warnings; human evaluation records target correctness and temporal consistency independently.
+
+## 5. Tenant admission and fair scheduling
+Files: app/server.mjs, app/original-generation.mjs, app/budget.mjs; new app/admission.mjs and tests.
+- [ ] Introduce owner allocation records in persisted state; missing SaaS allocation denies paid work. Retain global provider ceiling and local single-user behavior.
+- [ ] Atomically reserve owner and global allowance with job approval; avoid double reservation in generation runner. Preserve holds for unknown acceptance.
+- [ ] Bound waiting jobs per owner and globally; choose next owner round-robin while keeping one worker initially. Unknown requests block the affected owner, except unresolved global budget accounting.
+- [ ] Tests with three accounts: quota isolation, fair dispatch, retry idempotency, restart restoration, and global cap. No actual provider calls.
+
+## 6. Working-space admission and lifecycle
+Files: app/server.mjs, app/download.mjs, app/state-store.mjs; new app/storage-admission.mjs and tests.
+- [ ] Count uploads, media and intermediates; reserve anticipated scratch/output bytes before provider submission. Record reservation by job id.
+- [ ] Reject insufficient capacity with actionable copy; retain original and recovery assets. Release working reservation only after terminal cleanup.
+- [ ] Build reference graph across revisions, candidates, jobs, drafts and presets before proposing deletion. Keep purge explicit and recoverable where possible.
+- [ ] Tests simulate low disk, concurrent uploads, restart and failed processing; required media must never be removed.
+
+## 7. Billing reconciliation and account recovery
+Files: app/reconciliation.mjs, app/auth.mjs; separate operator and user-facing UI components.
+- [ ] Add pending-hold age and explanation, keeping actual charge unknown until authoritative evidence exists. Never infer refunds from failures.
+- [ ] Add operator-only reconciliation with evidence and immutable audit entry; ordinary users cannot release global holds.
+- [ ] Choose verified email delivery or a vetted identity service before enabling self-service password reset. Until configured, keep controlled invitation access and documented operator-assisted verification.
+- [ ] Test expiry, token replay, session revocation, ownership, double reconciliation and actual charges above estimate.
+External input last: deployment origin, delivery provider and operator identity; do not invent credentials or ship an insecure recovery shortcut.
+
+## 8. Maintainability and release evidence
+- [ ] Extract queue/admission and plan-card responsibilities without changing unrelated behavior. Defer normalized SQLite migration until transaction invariants have tests.
+- [ ] Run focused tests per slice, TypeScript/build for UI, full suite once integrated. Distinguish synthetic tests from live model accuracy.
+- [ ] Five novice sessions: at least four complete select/describe/review/apply/export without coaching; all understand scope and charge before approval. Record actual outcomes, not inferred success.
+- [ ] Repeat a crash/restart exercise and multi-account isolation exercise before public access. Validate contest rules and capture uninterrupted demo separately from engineering completion.
+
+## Acceptance order
+1 and 2 unblock reliable batch use. 3 and 4 strengthen the product promise. 5 through 7 gate public use. 8 establishes evidence. Deployment and real-user testing remain explicitly separate from local implementation status.
+
+## Implementation checkpoint
+Completed in first slice:
+- Atomic batch enqueue: server defers individual saves/scheduling; batch commits job links and records together before scheduling.
+- Legacy orphan recovery: links existing idempotency-key-matched jobs without automatically submitting missing versions.
+- Expired unused batch plans are pruned; submitted history retained.
+- Approval cards now state this frame / selected range / whole clip and frame count from the reviewed plan.
+- Paid cards distinguish the 2x allowance reservation from verified charges.
+Validation: production TypeScript/Vite build passed; focused batch, impact and submission integration tests run without provider spending. Live server restart and browser verification remain pending; existing open tab intentionally not refreshed during draft work.
+Still open: scope adjustment UX, automated tracking guidance, quality diagnostics/evaluation, tenant quotas/fairness, working-space reservations, billing operator interface, account recovery, and novice testing. No claim of enterprise readiness.

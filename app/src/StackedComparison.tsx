@@ -1,0 +1,8 @@
+import {useEffect,useRef,type RefObject} from 'react';
+export function StackedComparison({originalLabel='Current',current,candidate,master,time,onTime,onPlaying,onError}:{originalLabel?:string;current:string,candidate:string,master:RefObject<HTMLVideoElement|null>,time:number,onTime:(v:number)=>void,onPlaying:(v:boolean)=>void,onError:()=>void}){
+ const original=useRef<HTMLVideoElement>(null);const initial=useRef(time);
+ useEffect(()=>{let raf=0;let disposed=false;
+  const sync=()=>{const a=original.current,b=master.current;if(a&&b&&a.readyState>=2){const drift=b.currentTime-a.currentTime;if((b.paused&&Math.abs(drift)>.001)||Math.abs(drift)>.12)a.currentTime=b.currentTime;if(b.paused||b.ended||b.readyState<3)a.pause();else if(a.paused)void a.play().catch(()=>{});a.playbackRate=b.playbackRate*(Math.abs(drift)>.025?(drift>0?1.04:.96):1);}if(!disposed)raf=requestAnimationFrame(sync);};raf=requestAnimationFrame(sync);return()=>{disposed=true;cancelAnimationFrame(raf);original.current?.pause();};
+ },[current,candidate,master]);
+ return <div className="stacked-comparison" aria-label="Synchronized current and candidate comparison"><section><span>{originalLabel} · original audio muted</span><video ref={original} src={current} muted playsInline onError={onError}/></section><section><span>Candidate · playback audio</span><video ref={master} src={candidate} playsInline onLoadedMetadata={e=>{e.currentTarget.currentTime=Math.min(initial.current,e.currentTarget.duration);onPlaying(false)}} onTimeUpdate={e=>onTime(e.currentTarget.currentTime)} onSeeked={e=>onTime(e.currentTarget.currentTime)} onPlay={()=>onPlaying(true)} onPause={()=>onPlaying(false)} onEnded={()=>onPlaying(false)} onError={onError}/></section></div>
+}

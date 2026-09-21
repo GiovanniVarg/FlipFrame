@@ -1,0 +1,26 @@
+# Local work products and machine-specific state
+.tools/
+work/
+outputs/
+**/node_modules/
+**/dist/
+**/data/
+**/.env
+**/.env.*
+!**/.env.example
+**/.segmentation/
+**/.segmentation-env/
+**/.venv/
+**/python_packages/
+**/__pycache__/
+**/.npm-cache/
+**/*.log
+**/*.sqlite*
+**/*.db
+**/*.mp4
+**/*.webm
+**/*.mkv
+**/*.pt
+**/*.pth
+**/*.pem
+**/*.key
