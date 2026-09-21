@@ -11,4 +11,4 @@ export function editScope(plan,duration,fps=30){
  if(plan.start<=0.5/fps&&Math.abs(plan.end-duration)<=0.5/fps)return `Whole clip · ${frames} frames`;
  return `Selected range · ${frames} frames`;
 }
-export function reservationLabel(plan){const estimate=plan.route?.estimatedUsd;return plan.route?.kind==='higgsfield'&&Number.isFinite(estimate)&&estimate>0?`Allowance held: $${(Math.ceil(estimate*2*1e6)/1e6).toFixed(2)}. This is a reservation, not a verified charge. Actual billing is confirmed separately.`:null;}
+export function reservationLabel(plan,job){if(job?.billing)return job.billing;const estimate=plan.route?.estimatedUsd;return plan.route?.kind==='higgsfield'&&Number.isFinite(estimate)&&estimate>0?`${job?'Allowance held':'Generation will reserve'}: $${(Math.ceil(estimate*2*1e6)/1e6).toFixed(2)}. This is a reservation, not a verified charge. Actual billing is confirmed separately.`:null;}

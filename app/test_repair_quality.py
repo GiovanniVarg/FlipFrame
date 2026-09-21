@@ -8,3 +8,17 @@ class QualityTests(unittest.TestCase):
  def test_visibility_gap(self):self.assertEqual(summarize([self.row(0),self.row(10,x=500)],1000,1000)['flaggedFrames'],0)
  def test_bounded(self):self.assertEqual(len(summarize([self.row(i,coverage=400) for i in range(100)],100,100)['warnings']),30)
 if __name__=='__main__':unittest.main()
+
+class ReplacementTests(unittest.TestCase):
+ def test_displaced_replacement_is_flagged(self):
+  import numpy as np
+  from repair_quality import replacement_metrics
+  a=np.zeros((100,100),np.uint8);b=a.copy();a[20:60,20:60]=1;b[20:60,30:70]=1
+  metrics=replacement_metrics(a,b)
+  row=dict(frame=0,selectedPixels=1600,coveragePixels=2000,centerX=40,centerY=40,**metrics)
+  self.assertIn('replacement-displacement',summarize([row],100,100)['warnings'][0]['reasons'])
+ def test_identical_silhouettes(self):
+  import numpy as np
+  from repair_quality import replacement_metrics
+  a=np.ones((10,10),np.uint8)
+  self.assertEqual(replacement_metrics(a,a),{'replacementShift':0.,'silhouetteOverlap':1.})

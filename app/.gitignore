@@ -13,3 +13,8 @@ test-replacement.mp4
 
 .env.local
 .env.*.local
+
+# Local billing verification artifacts (request identifiers, no credentials).
+billing-*.local.json
+verify-billing.local.mjs
+reconcile-verified.local.mjs

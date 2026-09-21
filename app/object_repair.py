@@ -1,6 +1,6 @@
 """Automatic local silhouette repair. No provider calls or credentials."""
 import json,sys,pathlib,tempfile,subprocess,hashlib,math
-from repair_quality import frame_metrics,summarize
+from repair_quality import frame_metrics,summarize,replacement_metrics
 import numpy as np
 import cv2
 from segmentation import predictor,prompts
@@ -128,10 +128,10 @@ def repair(q):
        region=solid_cleanup_core(region,radius)
        out,support=blend(frame,candidate,region,radius)
        check_protection(support,protected,index)
-       quality_rows.append(frame_metrics(index,authored,support))
+       quality_rows.append({**frame_metrics(index,authored,support),**replacement_metrics(*refined)})
        overlay[support!=0]=(overlay[support!=0]*.6+np.array([35,200,120])*.4).astype(np.uint8)
        processed+=1
-       if processed%30==0:print(f'Repaired {processed} frames',file=sys.stderr,flush=True)
+       print(f'Repair progress {index-first+1}/{last-first}',file=sys.stderr,flush=True)
      expected.append(hashlib.sha256(out.tobytes()).digest());encoders[0].stdin.write(out.tobytes());encoders[1].stdin.write(overlay.tobytes());index+=1
   finally:
    a.release();b.release()
@@ -139,6 +139,7 @@ def repair(q):
     encoder.stdin.close();error=encoder.stderr.read();encoder.stderr.close();encoder.wait()
     if encoder.returncode:raise ValueError('Local repair encoder failed')
   if processed==0:raise ValueError('No reviewed visible frames to repair')
+  print(f'Repair progress {last-first}/{last-first}',file=sys.stderr,flush=True)
   for name,target in [('result',q['output']),('coverage',q['reviewOutput'])]:
    run(['-i',str(folder/(name+'.mkv')),'-i',q['source'],'-map','0:v:0','-map','1:a?','-c:v','libvpx-vp9','-lossless','1','-pix_fmt','gbrp','-colorspace','rgb','-cpu-used','4','-row-mt','1','-threads','4','-c:a','libopus','-b:a','192k','-t',str(info['duration']),'-f','webm',target])
   verified=verify_encoded_frames(q['output'],expected)

@@ -214,7 +214,7 @@ test('known accepted dimension failure becomes a curated actionable category wit
  for(const error of [known]){
   let calls=0;const result=await pollGeneration({requestId:'123',statusUrl},{env,fetchImpl:async()=>{calls++;return Response.json({status:'failed',request_id:'123',error});}});
   assert.equal(calls,1);assert.equal(result.status,'failed');assert.equal(result.requestId,'123');assert.equal(result.failureCategory,'unsupported_video_dimensions');
-  assert.match(result.error,/Verify supported input dimensions/);assert.match(result.error,/reservation remains held/);
+  assert.match(result.error,/Verify supported input dimensions/);assert.match(result.error,/failed requests are not charged/);
   assert.ok(!result.error.includes(known));assert.ok(!/SECRET|private.invalid|640|720/.test(JSON.stringify(result)));
  }
 });
@@ -251,3 +251,7 @@ test('reference-to-video passes user images to the same reviewed provider body',
 });
 
  test('reference pricing uses authenticated no-video-input rate and rejects modified descriptions',async()=>{const input={kind:'reference-to-video',prompt:'Blue mug',imageUrls:['https://example.com/ref.png'],duration:5,resolution:'720p',aspectRatio:'16:9',pricingDimensions:{width:1280,height:720,inputSeconds:0,outputSeconds:5}};const description='Token-metered pricing. Billable video tokens = ceil((input video seconds + generated video seconds) × output width × output height × 24 fps / 1024). Image and audio references do not count as video input. At 480p or 720p, each 1,000 video tokens cost $0.0214 without video input or $0.01284 with video input (0.6× the standard rate). With video references, both input and generated video durations are billable. Rates shown are before any applicable customer discount.';const fetchImpl=async()=>new Response(JSON.stringify({type:'description',pricing_description:description}),{status:200});const quote=await estimateGeneration(input,{env:{HF_CREDENTIALS:'id:secret'},fetchImpl});assert.equal(quote.estimatedUsd,2.32);await assert.rejects(()=>estimateGeneration(input,{env:{HF_CREDENTIALS:'id:secret'},fetchImpl:async()=>new Response(JSON.stringify({type:'description',pricing_description:description+' changed'}),{status:200})}),/Unrecognized/);});
+
+test('estimate network failures explain safe retry without exposing internals',async()=>{
+ for(const code of ['EACCES','ETIMEDOUT'])await assert.rejects(estimateGeneration({kind:'text-to-video',prompt:'A bowl',duration:5,resolution:'720p',aspectRatio:'16:9'},{env,fetchImpl:async()=>{throw Object.assign(new Error('fetch failed'),{cause:{code}})}}),code==='EACCES'?/network permissions.*No generation was submitted/:/Retry Review cost.*No generation was submitted/);
+});

@@ -25,11 +25,19 @@ export function validateEdit(project, input) {
   if(input.scope==='frame'&&(masks.length!==1||Math.abs(masks[0].time-start)>1/30+1e-6||end-start>1/30+1e-6))throw new Error('Single-frame scope requires exactly one frame at its mask keyframe.');
   if(input.scope==='range'&&!input.visibleRanges&&(masks.length<2||masks[0].time>Math.ceil(start*30-1e-7)/30+1e-6||masks.at(-1).time<(Math.ceil(end*30-1e-7)-1)/30-1e-6))throw new Error('Mask keyframes must cover the reviewed range.');
  }
- return {...input,scope:input.operation==='object'?input.scope:undefined,start:Math.ceil(start*30-1e-7)/30,end:Math.min(project.duration,Math.ceil(end*30-1e-7)/30)};
+ return {...input,scope:input.operation==='object'?input.scope:undefined,start:Math.max(0,Math.ceil(start*30-1e-7)/30),end:Math.min(project.duration,Math.ceil(end*30-1e-7)/30)};
 }
 export function applyCandidate(project,candidate){
  if(candidate.baseRevisionId!==project.activeRevisionId)throw new Error('Candidate belongs to an older revision.');
  if(project.revisions.some(r=>r.id===candidate.id))throw new Error('Candidate already applied.');
- return {...project,activeRevisionId:candidate.id,revisions:[...project.revisions,{...candidate,parentId:project.activeRevisionId,createdAt:new Date().toISOString()}]};
+ const snapshot={duration:project.duration,width:project.width,height:project.height,fps:project.fps,thumbnailUrl:project.thumbnailUrl,waveform:project.waveform};
+ const metadata=candidate.mediaMetadata;
+ if(metadata&&(!Number.isFinite(metadata.duration)||metadata.duration<=0||metadata.duration>60.01||!Number.isInteger(metadata.width)||!Number.isInteger(metadata.height)||metadata.width<1||metadata.height<1||metadata.fps!==30))throw Error('Candidate media metadata is invalid.');
+ const revisions=project.revisions.map(r=>r.id===project.activeRevisionId?{...r,mediaMetadata:r.mediaMetadata||snapshot}:r);
+ return {...project,...(metadata?{duration:metadata.duration,width:metadata.width,height:metadata.height,fps:metadata.fps,thumbnailUrl:undefined,waveform:[]}:{}),activeRevisionId:candidate.id,revisions:[...revisions,{...candidate,parentId:project.activeRevisionId,mediaMetadata:metadata||snapshot,createdAt:new Date().toISOString()}]};
 }
-export function undoProject(project){const active=project.revisions.find(r=>r.id===project.activeRevisionId);return {...project,activeRevisionId:active?.parentId||project.revisions[0].id};}
+export function undoProject(project){
+ const active=project.revisions.find(r=>r.id===project.activeRevisionId),id=active?.parentId||project.revisions[0].id,target=project.revisions.find(r=>r.id===id);
+ const metadata=target?.mediaMetadata;
+ return {...project,...(metadata?{duration:metadata.duration,width:metadata.width,height:metadata.height,fps:metadata.fps,thumbnailUrl:metadata.thumbnailUrl,waveform:metadata.waveform||[]}:{}),activeRevisionId:id};
+}

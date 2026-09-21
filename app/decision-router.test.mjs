@@ -102,7 +102,7 @@ test('Jev may choose local picture replacement only when the current request exp
 });
 
 test('unsupported edits are explicit and do not fall through to a similar supported edit', async () => {
-  for (const text of ['trim the clip', 'cut the video at 3 seconds', 'crop the video', 'add subtitles', 'speed up the clip', 'reverse video', 'delete project']) {
+  for (const text of ['reverse video', 'delete project']) {
     const result = await classifyEdit({text}, {env: {}, fetchImpl: reply(response('picture'))});
     assert.equal(result.action, 'unsupported', text);
     assert.equal(result.source, 'rules');

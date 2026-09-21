@@ -69,9 +69,9 @@ test('definitively rejected submission releases hold once without retry',async t
  await f.runner().run(f.job);assert.equal(f.calls.submit,1);assert.equal(f.db.spend.reserved,0);
 });
 
-test('accepted provider failure retains billing reservation pending reconciliation',async t=>{
+test('accepted provider failure releases billing reservation',async t=>{
  const f=fixture(t);f.adapter.pollGeneration=async previous=>({...previous,status:'failed',error:'Provider failed after acceptance'});
- await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.equal(f.job.retryable,false);assert.equal(f.db.spend.reserved,.4);
+ await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.equal(f.job.retryable,false);assert.equal(f.db.spend.reserved,0);
 });
 
 test('simultaneous invocations share one submission and stable candidate',async t=>{
@@ -91,7 +91,8 @@ test('completed job removes intermediates after durable candidate save',async t=
  const f=fixture(t);let candidateWasDurable=false;const originalSave=f.dependencies.save;
  f.dependencies.save=()=>{originalSave();if(f.job.status==='completed'){candidateWasDurable=!!f.db.candidates[f.job.generation.candidateId];assert.ok(fs.existsSync(f.job.generation.paths.raw));}};
  await f.runner().run(f.job);assert.equal(f.job.status,'completed');assert.equal(candidateWasDurable,true);
- for(const name of ['clip','raw','trimmed'])assert.equal(fs.existsSync(f.job.generation.paths[name]),false);
+ assert.ok(fs.existsSync(f.job.generation.paths.raw));
+ for(const name of ['clip','trimmed'])assert.equal(fs.existsSync(f.job.generation.paths[name]),false);
  assert.equal(fs.existsSync(f.job.generation.paths.output),true);
 });
 
@@ -142,7 +143,7 @@ test('output ending inside selected interval fails closed before composition',as
  const f=fixture(t);f.job.generation.processEnd=5;f.job.generation.start=1;f.job.generation.end=4;
  const original=f.dependencies.runMedia;
  f.dependencies.runMedia=async request=>request.action==='probe'?{duration:3.99,hasAudio:true}:original(request);
- await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.match(f.job.error,/ends before the selected interval/);assert.equal(f.calls.render,0);assert.equal(Object.keys(f.db.candidates).length,0);assert.equal(f.db.projects.p.activeRevisionId,'r');
+ await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.match(f.job.error,/Checking this completed request again cannot add frames/);assert.equal(f.job.retryable,false);assert.equal(f.job.failureCode,'OUTPUT_TOO_SHORT');assert.equal(f.calls.render,0);assert.equal(Object.keys(f.db.candidates).length,0);assert.equal(f.db.projects.p.activeRevisionId,'r');
 });
 
 test('fresh quote above approved plan never reserves or submits',async t=>{const f=fixture(t);f.job.generation.approvedEstimateUsd=.1;await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.match(f.job.error,/approved plan/);assert.equal(f.calls.submit,0);assert.equal(f.db.spend.reserved,0)});

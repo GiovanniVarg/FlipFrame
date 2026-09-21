@@ -1,3 +1,4 @@
+import {releaseProviderFailure} from './provider-refunds.mjs';
 import {ownedReference} from './reference-images.mjs';
 import {OBJECT_REPAIR_PHASE,verifiedObjectRepair} from './object-repair-contract.mjs';
 import fs from 'node:fs';
@@ -35,12 +36,12 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
    }
    if(!provider){
     if(g.processEnd-g.processStart<4-1e-6||g.processEnd-g.processStart>30+1e-6)throw new Error('This old plan has incompatible source duration. Create a new generation plan to prepare 4–30 seconds of context.');
-    if(g.preparationVersion!==2){g.extracted=false;delete g.videoUrl;}
+    if(g.preparationVersion!==3){g.extracted=false;delete g.videoUrl;}
     if(!g.videoUrl){
      if(!g.extracted||!fs.existsSync(g.paths.clip)){
       job.phase='Preparing source';await persist();
-      await runMedia({action:'extract',source:g.source,output:g.paths.clip,start:g.processStart,end:g.processEnd,providerResolution:g.resolution||'720p'});
-      g.extracted=true;g.preparationVersion=2;await persist();
+      await runMedia({action:'extract',source:g.source,output:g.paths.clip,start:g.processStart,end:g.processEnd,providerResolution:g.resolution||'720p',tailPadding:g.tailPadding||0});
+      g.extracted=true;g.preparationVersion=3;await persist();
      }
      job.phase='Uploading selected clip';await persist();
      g.videoUrl=await adapter.uploadAsset(fs.readFileSync(g.paths.clip),'video/mp4');await persist();
@@ -105,10 +106,7 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
     }
    }
    if(rejectedStatuses.has(provider.status)){
-    // A definitive rejected POST has no accepted request; accepted failures retain a billing hold.
-    if(!provider.requestId&&g.reserved&&!g.reservationReleased){
-     db.spend.reserved=Math.max(0,db.spend.reserved-g.reservedUsd);g.reservationReleased=true;
-    }
+    releaseProviderFailure(db,job,provider,g);
     job.status='failed';job.retryable=false;job.phase='Provider rejected generation';job.error=provider.error||'Provider generation '+provider.status;
     await persist();return job;
    }
@@ -124,7 +122,11 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
     const info=await runMedia({action:'probe',source:g.paths.raw});
     if(g.kind==='audio'&&!info.hasAudio)throw new Error('Higgsfield returned no audio stream. Original unchanged.');
     const selectedEndOffset=g.end-g.processStart;
-    if(!Number.isFinite(info.duration)||info.duration<selectedEndOffset-1e-6)throw new Error('Generated video ends before the selected interval is complete; no retiming or looping was applied');
+    if(!Number.isFinite(info.duration)||info.duration<selectedEndOffset-1e-6){
+     g.generatedDuration=Number.isFinite(info.duration)?info.duration:null;
+     job.failureCode='OUTPUT_TOO_SHORT';
+     throw new Error(Number.isFinite(info.duration)?`Higgsfield returned ${info.duration.toFixed(2)}s; this selection needs ${selectedEndOffset.toFixed(2)}s of footage. The final ${(selectedEndOffset-info.duration).toFixed(2)}s is missing. Checking this completed request again cannot add frames. Your original and selection are unchanged. A new generation requires a new cost review.`:'Higgsfield returned an unreadable duration. Your original and selection are unchanged.');
+    }
     g.generatedDuration=info.duration;
     if(Math.abs(info.duration-(g.processEnd-g.processStart))>1/30+.001){
      g.timingNote='Generated context duration differs from the source context. The output covers the selected interval and is trimmed at the original offsets without retiming or looping. Review visual alignment and timing.';
@@ -153,15 +155,15 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
    job.billing='Estimate reserved; actual charge not yet reconciled';delete job.error;await persist();
    // Only discard intermediates once the durable candidate record references the finished export.
    // A cleanup failure must never turn successful, paid work into a failed generation.
-   for(const intermediate of [g.paths.clip,...(g.operation==='object'?[]:[g.paths.raw,g.paths.trimmed]),g.paths.reference,g.paths.userReference].filter(Boolean)){
+   for(const intermediate of [g.paths.clip,...(g.operation==='object'?[]:[g.paths.trimmed]),g.paths.reference,g.paths.userReference].filter(Boolean)){
     if(intermediate!==g.paths.output){try{fs.rmSync(intermediate,{force:true});}catch{}}
    }
    return job;
   }catch(error){
    const provider=g.providerState||job.providerState;
    const ambiguous=!provider&&g.submission==='attempting'||provider?.status==='unknown';
-   job.status=ambiguous?'unknown':'failed';job.retryable=!ambiguous&&!rejectedStatuses.has(provider?.status);
-   job.phase=ambiguous?'Acceptance requires reconciliation':provider?.status==='completed'?'Local processing failed; safe to retry':'Generation interrupted; safe to resume';
+   job.status=ambiguous?'unknown':'failed';job.retryable=job.failureCode!=='OUTPUT_TOO_SHORT'&&!ambiguous&&!rejectedStatuses.has(provider?.status);
+   job.phase=job.failureCode==='OUTPUT_TOO_SHORT'?'Generated footage is too short':ambiguous?'Acceptance requires reconciliation':provider?.status==='completed'?'Local processing failed; safe to retry':'Generation interrupted; safe to resume';
    job.error=error instanceof Error?error.message:'Generation processing failed';await persist();return job;
   }
  }

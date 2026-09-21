@@ -3,7 +3,7 @@ export function createCandidateLibrary({db,save,getProject}){
   const p=getProject(projectId,owner);
   return Object.values(db.candidates).filter(c=>c.projectId===p.id).map(c=>{
    const job=Object.values(db.jobs).find(j=>j.projectId===p.id&&j.result?.id===c.id),context=job?.generation||job?.workRequest?.request;
-   return {id:c.id,projectId:c.projectId,baseRevisionId:c.baseRevisionId,url:c.url,label:c.label,name:c.name||'',favorite:c.favorite===true,createdAt:c.createdAt,dismissedAt:c.dismissedAt,maskReviewUrl:c.maskReviewUrl,note:c.note,repairVerification:c.repairVerification,referenceImage:c.referenceImage,start:c.start??context?.start,end:c.end??context?.end,canApply:c.baseRevisionId===p.activeRevisionId&&!p.revisions.some(r=>r.id===c.id)};
+   return {id:c.id,projectId:c.projectId,baseRevisionId:c.baseRevisionId,url:c.url,label:c.label,name:c.name||'',favorite:c.favorite===true,createdAt:c.createdAt,dismissedAt:c.dismissedAt,maskReviewUrl:c.maskReviewUrl,note:c.note,mediaMetadata:c.mediaMetadata,sourceFrames:c.sourceFrames,localVerification:c.localVerification,transformationVerification:c.transformationVerification,repairVerification:c.repairVerification,precisionVerification:c.precisionVerification,referenceImage:c.referenceImage,start:c.start??context?.start,end:c.end??context?.end,canCompare:c.baseRevisionId===p.activeRevisionId,canApply:c.baseRevisionId===p.activeRevisionId&&!p.revisions.some(r=>r.id===c.id)};
   }).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||String(b.createdAt||'').localeCompare(String(a.createdAt||''))||a.id.localeCompare(b.id));
  }
  function update(projectId,owner,candidateId,input){

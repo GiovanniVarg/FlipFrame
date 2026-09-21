@@ -25,9 +25,12 @@ function ranges(values,project,gaps=false){
   return {start,end,...(own(value,'reason')?{reason:text(value.reason,3000,'Gap reason')}:{})};
  });
 }
-const editorFields=['start','end','time','mode','operation','gain','prompt','scope','masks','points','visibleRanges','gaps','audioId','visualId','candidateId','repairCandidateId','protectedAreas','assetName'];
+const editorFields=['objectName','objectSelections','start','end','time','mode','operation','gain','prompt','scope','masks','points','visibleRanges','gaps','audioId','visualId','candidateId','repairCandidateId','protectedAreas','assetName'];
 function editorDraft(value,project,db){
  record(value,editorFields,'Editor draft');const result={};
+ if(own(value,'objectName'))result.objectName=text(value.objectName,80,'Object name');
+ if(own(value,'objectSelections')){if(!Array.isArray(value.objectSelections)||value.objectSelections.length>8)throw failure('Save up to eight object selections.');const names=new Set();result.objectSelections=value.objectSelections.map(item=>{record(item,['name','start','end','scope','masks','visibleRanges','gaps'],'Object selection');const name=text(item.name,80,'Object name');if(!name.trim()||names.has(name))throw failure('Object names must be nonempty and unique.');names.add(name);const {name:_,...fields}=item;return {name,...editorDraft(fields,project,db)};});}
+
  for(const key of ['start','end','time'])if(own(value,key))result[key]=finite(value[key],0,project.duration,key);
  if(own(result,'start')&&own(result,'end')&&result.end<=result.start)throw failure('Draft range must end after its start.');
  if(own(value,'mode'))result.mode=choice(value.mode,['picture','audio','object'],'editor mode');

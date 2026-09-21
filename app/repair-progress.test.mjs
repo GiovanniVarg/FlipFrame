@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {repairProgress} from './repair-progress.mjs';
+test('progress accepts bounded worker messages and distinguishes encoding',()=>{assert.match(repairProgress('Repair progress 3/36'),/3 of 36/);assert.match(repairProgress('Repair progress 36/36'),/Encoding/);for(const line of ['secret text','Repair progress 37/36','Repair progress 0/0','Repair progress 1/301'])assert.equal(repairProgress(line),null);});

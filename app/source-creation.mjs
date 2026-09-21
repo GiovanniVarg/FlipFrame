@@ -1,3 +1,4 @@
+import {releaseProviderFailure} from './provider-refunds.mjs';
 import {randomUUID,createHash} from 'node:crypto';
 import {reserve} from './budget.mjs';
 
@@ -95,9 +96,8 @@ export function createSourceCreationService({db,save,adapter,budgetLimit,importG
     provider=next;record.providerState=provider;if(provider.requestId)record.acceptedRequestId=provider.requestId;await persist();
    }
    if(terminalFailure.has(provider.status)){
-    // Only a definite rejection with no accepted request identity can free funds.
-    if(!provider.requestId&&!record.acceptedRequestId)releaseUnsent(record);
-    record.status='failed';record.phase='Provider generation failed';record.error=provider.requestId?'Higgsfield could not create this source. The accepted request retains its billing hold pending reconciliation.':'Higgsfield rejected source creation before acceptance. Its reservation was released.';await persist();return;
+    releaseProviderFailure(db,record,provider);
+    record.status='failed';record.phase='Provider generation failed';record.error='Higgsfield could not create this source. No charge; its budget reservation was released.';await persist();return;
    }
    if(provider.status!=='completed')throw fail('The existing generation is still pending. Recover status polling; no new generation will be submitted.');
    if(typeof provider.outputUrl!=='string'||!provider.outputUrl)throw fail('The completed request has no usable output. Recover the existing request; do not submit again.');

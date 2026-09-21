@@ -81,7 +81,7 @@ function safeGenerationFailure(data){
   const message=typeof data.error==='string'?data.error:undefined;
   if(data.status==='failed'&&message===UNSUPPORTED_DIMENSIONS_MESSAGE)return {
     failureCategory:'unsupported_video_dimensions',
-    error:'Higgsfield rejected the source video dimensions or aspect ratio. Verify supported input dimensions and prepare a compatible source before reviewing a new request. This accepted request may still be billable; its reservation remains held.',
+    error:'Higgsfield rejected the source video dimensions or aspect ratio. Verify supported input dimensions and prepare a compatible source before reviewing a new request. Provider-confirmed failed requests are not charged; the app releases their budget reservation.',
   };
   return {error:`Higgsfield generation ${data.status}.`,failureCategory:null};
 }
@@ -183,7 +183,12 @@ function describedVideoEditEstimate(data, input, endpoint, body) {
 // https://docs.higgsfield.ai/docs/concepts/billing-and-retention
 export async function estimateGeneration(input, { env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 30000 } = {}) {
   const { endpoint, body } = generationContract(input);
-  const response = await request(`${API}/estimate/${endpoint}`, { method: 'POST', headers: { Authorization: authorization(env), 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetchImpl, timeoutMs);
+  let response;
+  try { response = await request(`${API}/estimate/${endpoint}`, { method: 'POST', headers: { Authorization: authorization(env), 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, fetchImpl, timeoutMs); }
+  catch(error) {
+    const code=error?.cause?.code??error?.code;
+    throw new Error(['EACCES','EPERM'].includes(code)?'Cost review blocked by this server’s network permissions. Allow outbound HTTPS for the server, then retry Review cost. No generation was submitted.':'Could not reach Higgsfield for a cost estimate. Retry Review cost when the connection is available. No generation was submitted.');
+  }
   if (!response.ok) throw new Error(`Higgsfield estimate returned HTTP ${response.status}. No generation was submitted.`);
   const data = await response.json();
   if (data.type === 'description') return describedVideoEditEstimate(data, input, endpoint, body);

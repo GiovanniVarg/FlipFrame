@@ -145,7 +145,7 @@ test('generation plans disclose processing context separately from the unchanged
    const plan=buildEditPlan(p,{...input,text:'Create the requested change',start,end},{action});
    assert.ok(plan.start===start);assert.equal(plan.end,end);
    assert.equal(plan.processStart,processStart);assert.equal(plan.processEnd,processEnd);
-   assert.equal(plan.inputDuration,processEnd-processStart);
+   assert.equal(plan.inputDuration,processEnd-processStart+Math.max(0,.5-(processEnd-end)));
   }
  }
  const local=buildEditPlan(p,input,{action:'mute'});assert.equal(local.processStart,undefined);assert.equal(local.inputDuration,undefined);
@@ -174,3 +174,15 @@ test('reference attachments are project-owned, frozen with plans and included in
  await assert.rejects(()=>service.message('p','owner',{...request,referenceImageId:undefined}),/different/);
  await assert.rejects(()=>service.message('p','owner',{...request,referenceImageId:'foreign',idempotencyKey:'foreign-reference-001'}),/project/);
 });
+
+test('routing receives active object and selected range without authorizing execution',async()=>{let context;const service=createConversationService({db:{jobs:{}},save:()=>{},getProject:()=>p,classify:async request=>{context=request.context;return {action:'object',source:'jev'};}});const result=await service.message('p','owner',{...input,text:'Change its material',start:2,end:4,idempotencyKey:'object-context-test',selectionContext:{hasMask:true,reviewed:true,maskCount:60,objectName:'Car'}});assert.equal(context.hasMask,true);assert.equal(context.selectedObjectName,'Car');assert.deepEqual(context.selectedRange,{start:2,end:4});assert.equal(result.plans[0].status,'needs_input');});
+
+test('references to the current frame or selected frames inherit the visible timeline range',()=>{
+ for(const text of ['have in this frame a hyperrealistic transformers movie transformation from the car into a mechanical humanoid robot','Change the car across the selected frames','Make this frame cinematic','Replace the object within the current time range']){
+ const plan=buildEditPlan(p,{...input,text,start:76/30,end:151/30},{action:'object'});assert.equal(plan.start,76/30,text);assert.equal(plan.end,151/30,text);
+ }
+ const explicit=buildEditPlan(p,{...input,text:'Change this frame at 3 seconds',start:76/30,end:151/30},{action:'object'});assert.equal(explicit.start,3);assert.ok(Math.abs(explicit.end-3-1/30)<1e-6);
+ assert.throws(()=>buildEditPlan(p,{...input,text:'Change this frame from -2 to 3 seconds'},{action:'object'}),/nonnegative/);
+});
+
+test('end selection prices input tail protection',()=>{const w=computeGenerationWindow({duration:5,width:1280,height:720},2.5,5);assert.equal(w.processEnd,5);assert.equal(w.tailPadding,.5);assert.equal(w.pricingDimensions.inputSeconds,4.5);assert.equal(w.pricingDimensions.outputSeconds,4.5);});

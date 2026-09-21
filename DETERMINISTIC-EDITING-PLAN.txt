@@ -1,0 +1,62 @@
+DETERMINISTIC EDITING EXPANSION — 2026-09-21
+
+Authorized design: conversation proposes one operation, deterministic renderer executes,
+Jev classifies only. A single capability registry describes arguments, selection,
+reference requirements, preservation scope, and examples. Never advertise unsupported
+automation or use a generation fallback for a deterministic operation.
+
+1. Registry + conservative parameter parsers + Jev criteria and confirmation cards.
+2. Verified local pixel tools: tracked blur/pixelation, exposure/contrast,
+   supplied text/captions, logo overlay, four-corner planar replacement.
+3. Timeline and delivery: keep/remove range, move range, frame-repeat speed,
+   freeze, split metadata, crop/resize, export, audio fades. Preserve revision
+   metadata and restore it on undo; previews use candidate dimensions/duration.
+4. Tests: masks/gaps/outside-scope pixels, real encode, geometry/metadata/undo,
+   parsing ambiguity and ownership, conversation execution.
+5. Browser acceptance: chat -> confirmation -> preview -> apply -> undo.
+
+Constraints: source masters are 30fps, <=1080p, <=60s. Segmentation is not ground
+truth. Planar overlays require ordered convex corners and reviewed tracking.
+Text is supplied, not auto-transcribed. Speed uses existing frames, not invented
+slow-motion frames. Audio filters re-encode audio; video-only effects copy audio.
+Generation cannot guarantee semantic correctness; deterministic scope cannot expand.
+
+Automation next: automatic selection proposals with uncertainty, not silent guesses.
+Implemented status must be based on tests and app verification, never registry presence.
+
+IMPLEMENTED AND VERIFIED
+- 18 local tools share app/local-tools.mjs with the Jev choice criteria, conservative
+  parameter parser, plan cards, and command discovery. Existing precision recolor,
+  gain/mute/replacement/export commands remain available.
+- Server revalidates operation parameters, source revision, asset ownership and
+  selection review. Local operations do not fall back to paid generation.
+- Candidates retain dimensions, duration, frame mapping and verification evidence.
+  Apply/Undo restores media metadata; comparisons map candidate frames to originals.
+- Real encoding tests exercised all 18 tools on moving footage. Four Python tests
+  passed, including mask exclusions, visibility gaps and invalid planar corners.
+- 89 targeted Node tests passed, including chat execution, idempotency, ownership,
+  parameter validation, and trim Apply/Undo. Production build passed.
+- Browser acceptance: chat "trim selected range" -> no-charge review -> preview
+  of 2.00-3.20s -> synchronized comparison -> Apply -> conversational Undo.
+  Original 5.03s source restored; saved candidates retained. No paid API calls.
+
+CURRENT LIMITS / AUTOMATION ROADMAP
+- Jev chooses a tool; it cannot provide executable code or bypass validated bounds.
+  New live Jev accuracy has not been measured. Exact commands work without a call.
+- Semantic object selection remains a reviewed mask. Future automatic proposals
+  must expose uncertainty, respect occlusion and stop at uncertain tracking gaps.
+- Planar replacement needs four ordered tracked corners, not a SAM silhouette.
+  A flat image overlay does not solve arbitrary object deformation or occlusion.
+- Supplied text is a fixed caption/title, not speech transcription. Logos use a
+  fixed top-right position. Crop is centered; resize letterboxes the whole clip.
+- Split stores a clip boundary; reorder moves the selected interval to start/end.
+- Speed repeats/drops existing frames and adjusts audio. Freeze holds the first
+  selected picture while retaining audio. No synthetic smooth slow motion.
+- Automatic multi-step editing and removing review are future work. This release
+  retains confirmation and preview before changes become the current revision.
+
+FINAL REGRESSION RESULT
+Full Node suite: 338 tests, 336 passed, 2 skipped, 0 failed.
+Fixed the integration harness to consume the media response, await child close,
+and clean up asynchronously; allowed 60s for rendering under concurrent test load.
+Build and targeted Python encoding tests passed. Live Jev was not called.

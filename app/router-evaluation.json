@@ -291,39 +291,39 @@
     },
     {
       "id": "intent-034",
-      "category": "unsupported",
+      "category": "local-freeform",
       "text": "Trim the first two seconds",
-      "expectedOfflineAction": "unsupported",
-      "humanIntent": "unsupported",
+      "expectedOfflineAction": "clarify",
+      "humanIntent": "trim",
       "partition": "development",
-      "expectedOfflineReason": "unsupported_operation"
+      "expectedOfflineReason": "router_not_configured"
     },
     {
       "id": "intent-035",
-      "category": "unsupported",
+      "category": "local-freeform",
       "text": "Crop this to a square",
-      "expectedOfflineAction": "unsupported",
-      "humanIntent": "unsupported",
+      "expectedOfflineAction": "clarify",
+      "humanIntent": "crop",
       "partition": "development",
-      "expectedOfflineReason": "unsupported_operation"
+      "expectedOfflineReason": "router_not_configured"
     },
     {
       "id": "intent-036",
-      "category": "unsupported",
+      "category": "local-freeform",
       "text": "Speed up the video",
-      "expectedOfflineAction": "unsupported",
-      "humanIntent": "unsupported",
+      "expectedOfflineAction": "clarify",
+      "humanIntent": "speed",
       "partition": "held-out",
-      "expectedOfflineReason": "unsupported_operation"
+      "expectedOfflineReason": "router_not_configured"
     },
     {
       "id": "intent-037",
-      "category": "unsupported",
+      "category": "local-freeform",
       "text": "Add captions",
-      "expectedOfflineAction": "unsupported",
-      "humanIntent": "unsupported",
+      "expectedOfflineAction": "clarify",
+      "humanIntent": "title",
       "partition": "development",
-      "expectedOfflineReason": "unsupported_operation"
+      "expectedOfflineReason": "router_not_configured"
     },
     {
       "id": "intent-038",

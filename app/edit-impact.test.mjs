@@ -5,3 +5,7 @@ test('paid action displays estimate and never calls missing pricing free',()=>{a
 import {editScope,reservationLabel} from './edit-impact.mjs';
 test('scope distinguishes one frame, full clip and selected range',()=>{assert.equal(editScope({start:2.433333,end:2.466667},5),'This frame only · 1 frame');assert.equal(editScope({start:0,end:5},5),'Whole clip · 150 frames');assert.equal(editScope({start:1,end:3},5),'Selected range · 60 frames')});
 test('reservation wording never presents a hold as a verified charge',()=>{assert.match(reservationLabel({route:{kind:'higgsfield',estimatedUsd:1.74}}),/\$3.48.*not a verified charge/);assert.equal(reservationLabel({route:{kind:'local'}}),null)});
+test('released provider hold replaces the estimate rather than claiming money is held',()=>{
+ assert.equal(reservationLabel({route:{kind:'higgsfield',estimatedUsd:2.55}},{billing:'Provider confirmed no charge; budget reservation released'}),'Provider confirmed no charge; budget reservation released');
+ assert.match(reservationLabel({route:{kind:'higgsfield',estimatedUsd:2.55}}),/will reserve/);
+});

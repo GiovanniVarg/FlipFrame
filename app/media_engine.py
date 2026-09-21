@@ -282,6 +282,14 @@ def extract(request):
         if info['width'] < info['height']: width,height=height,width
         if abs(info['width']/info['height']-1) < .05: width=height=int(resolution[:-1])
         provider_filters = ['-vf', f'scale={width}:{height},setsar=1']
+    tail_padding = finite(request.get('tailPadding', 0), 'tailPadding')
+    if tail_padding < 0 or tail_padding > .5 or (tail_padding and resolution is None):
+        raise ValueError('Input tail protection must be 0 to 0.5 seconds on provider sources only')
+    if end-start+tail_padding > 30+1e-6:
+        raise ValueError('Provider source including tail protection exceeds 30 seconds')
+    if tail_padding:
+        provider_filters[1] += f',trim=duration={end-start},setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop={round(tail_padding*30)+1}'
+        if info['hasAudio']: provider_filters += ['-af', f'atrim=duration={end-start},asetpts=PTS-STARTPTS,apad=pad_dur={tail_padding}']
     first, last = math.ceil(start*30-1e-7), math.ceil(end*30-1e-7)
     if first == last: raise ValueError('Selection contains no video frame')
     with tempfile.TemporaryDirectory(prefix='local-extract-') as temporary:
@@ -291,7 +299,7 @@ def extract(request):
         last=min(last,normalized_info['frames'])
         if first>=last: raise ValueError('Selection contains no video frame')
         actual_start,actual_end=first/30,last/30
-        run(['-ss',actual_start,'-i',normalized,'-t',actual_end-actual_start,
+        run(['-ss',actual_start,'-i',normalized,'-t',actual_end-actual_start+tail_padding,
              '-map','0:v:0','-map','0:a:0?',*provider_filters,'-c:v','libx264','-preset','veryfast',
              '-crf','18','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart',output])
     return dict(output=str(pathlib.Path(output).resolve()),actualStart=actual_start,actualEnd=actual_end,**probe(output))
