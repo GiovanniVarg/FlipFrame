@@ -18,17 +18,13 @@ Conversation gets you started; hands-on controls help you get precise. Pause on 
 
 A woman in a flowing dress becomes a man in a light suit, with the rocky coastline and sunset retained around the subject. Original on top; edited result below.
 
-[![Watch the coastal subject replacement comparison](docs/assets/mountain-comparison.jpg)](docs/assets/mountain-comparison.mp4)
-
-[Watch the object-edit comparison · 2 seconds](docs/assets/mountain-comparison.mp4)
+https://github.com/user-attachments/assets/d10633aa-3299-40c9-a30c-819db7c13cf6
 
 ### 02 · Change an object’s motion
 
 The wooden bottle’s cap screws on and off in the edited clip. Compare the original above with the edited result below to see the change in the cap’s motion.
 
-[![Watch the bottle comparison](docs/assets/bottle-comparison.jpg)](docs/assets/bottle-comparison.mp4)
-
-[Watch the bottle comparison · 4 seconds](docs/assets/bottle-comparison.mp4)
+https://github.com/user-attachments/assets/3f883d9d-bebe-4356-8fe0-ecbaf23fb0dc
 
 ## From an idea to an edit
 
