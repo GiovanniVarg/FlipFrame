@@ -1,12 +1,25 @@
+function insidePolygon(point,polygon){
+ const [x,y]=point;let inside=false;
+ for(let i=0,j=polygon.length-1;i<polygon.length;j=i++){
+  const [ax,ay]=polygon[j],[bx,by]=polygon[i];
+  const cross=(x-ax)*(by-ay)-(y-ay)*(bx-ax);
+  if(Math.abs(cross)<1e-8&&x>=Math.min(ax,bx)-1e-8&&x<=Math.max(ax,bx)+1e-8&&y>=Math.min(ay,by)-1e-8&&y<=Math.max(ay,by)+1e-8)return true;
+  if((ay>y)!==(by>y)&&x<(bx-ax)*(y-ay)/(by-ay)+ax)inside=!inside;
+ }return inside;
+}
 export function validateEdit(project, input) {
  if(input.baseRevisionId!==project.activeRevisionId) throw new Error('Project revision changed. Review your edit again.');
  const {start,end}=input;
  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>project.duration+0.001) throw new Error('Invalid range: choose start before end inside the source.');
  const snappedStart=Math.ceil(start*30-1e-7)/30,snappedEnd=Math.min(project.duration,Math.ceil(end*30-1e-7)/30);
  if(snappedEnd<=snappedStart)throw new Error('Select at least one complete frame.');
- if(!['mute','gain','replace_audio','picture','object'].includes(input.operation)) throw new Error('Unsupported operation');
+ if(!['mute','gain','replace_audio','picture','object','background'].includes(input.operation)) throw new Error('Unsupported operation');
+ if(input.operation==='background'&&Array.isArray(input.masks)){
+  input={...input,masks:input.masks.filter(mask=>Number.isFinite(mask.time)&&mask.time>=snappedStart-1e-6&&mask.time<snappedEnd-1e-6)};
+  if(input.masks.some(mask=>Math.abs(mask.time*30-Math.round(mask.time*30))>1e-5))throw new Error('Background masks must align to exact video frames.');
+ }
  if(input.operation==='gain'&&(!Number.isFinite(input.gainDb)||input.gainDb < -60||input.gainDb>12))throw new Error('Gain must be between -60 and 12 dB');
- if(input.operation==='object') {
+ if(['object','background'].includes(input.operation)) {
   const masks=input.masks;
   if(!Array.isArray(masks)||!masks.length||masks.length>1800)throw new Error('Draw a mask first.');
   let previous=-1, count=masks[0].points?.length;
@@ -14,6 +27,16 @@ export function validateEdit(project, input) {
    if(!Number.isFinite(mask.time)||mask.time<0||mask.time>project.duration||mask.time<=previous)throw new Error('Mask keyframes must be ordered inside the source.');
    previous=mask.time;
    if(!Array.isArray(mask.points)||mask.points.length<3||mask.points.length>500||mask.points.length!==count||mask.points.some(p=>!Array.isArray(p)||p.length!==2||p.some(v=>!Number.isFinite(v)||v<0||v>1)))throw new Error('Invalid polygon mask; use matching vertices inside the frame.');
+  }
+  for(const mask of masks){if(mask.holes!==undefined&&(!Array.isArray(mask.holes)||mask.holes.length>64||mask.holes.some(hole=>!Array.isArray(hole)||hole.length<3||hole.length>500||hole.some(point=>!Array.isArray(point)||point.length!==2||point.some(v=>!Number.isFinite(v)||v<0||v>1)))))throw new Error('Invalid openings in object mask.');}
+  for(const mask of masks)if(mask.holes?.some(hole=>hole.some(point=>!insidePolygon(point,mask.points))))throw new Error('Openings must stay inside the object outline.');
+  if(input.visibleRanges&&!Array.isArray(input.visibleRanges))throw new Error('Invalid visible ranges');
+  if(input.operation==='background'&&input.scope==='range'){
+   for(let frame=Math.ceil(start*30-1e-7);frame<Math.ceil(end*30-1e-7);frame++){
+    const time=frame/30;
+    if(input.visibleRanges&&!input.visibleRanges.some(r=>time>=r.start-1e-6&&time<r.end-1e-6))continue;
+    if(!masks.some(m=>Math.abs(m.time-time)<1e-5))throw new Error('Background edits need a reviewed object mask on every visible frame. Track the object first.');
+   }
   }
   if(input.visibleRanges){
    if(!Array.isArray(input.visibleRanges)||!input.visibleRanges.length||input.visibleRanges.length>1800)throw new Error('Invalid visible ranges');let lastEnd=snappedStart;
@@ -25,7 +48,7 @@ export function validateEdit(project, input) {
   if(input.scope==='frame'&&(masks.length!==1||Math.abs(masks[0].time-start)>1/30+1e-6||end-start>1/30+1e-6))throw new Error('Single-frame scope requires exactly one frame at its mask keyframe.');
   if(input.scope==='range'&&!input.visibleRanges&&(masks.length<2||masks[0].time>Math.ceil(start*30-1e-7)/30+1e-6||masks.at(-1).time<(Math.ceil(end*30-1e-7)-1)/30-1e-6))throw new Error('Mask keyframes must cover the reviewed range.');
  }
- return {...input,scope:input.operation==='object'?input.scope:undefined,start:Math.max(0,Math.ceil(start*30-1e-7)/30),end:Math.min(project.duration,Math.ceil(end*30-1e-7)/30)};
+ return {...input,scope:['object','background'].includes(input.operation)?input.scope:undefined,start:Math.max(0,Math.ceil(start*30-1e-7)/30),end:Math.min(project.duration,Math.ceil(end*30-1e-7)/30)};
 }
 export function applyCandidate(project,candidate){
  if(candidate.baseRevisionId!==project.activeRevisionId)throw new Error('Candidate belongs to an older revision.');

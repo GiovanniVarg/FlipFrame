@@ -1,6 +1,7 @@
+import {formulaEstimate} from './pricing.mjs';
 import {releaseProviderFailure} from './provider-refunds.mjs';
 import {randomUUID,createHash} from 'node:crypto';
-import {reserve} from './budget.mjs';
+import {reserve,budgetHold} from './budget.mjs';
 
 const terminalFailure=new Set(['failed','nsfw','canceled']);
 const pendingStatus=new Set(['queued','in_progress','running']);
@@ -15,8 +16,7 @@ export function sourceCreationEstimate({duration,resolution,aspectRatio}){
  const long=Math.ceil(short*ratio/64)*64,small=Math.ceil(short/64)*64;
  const width=aspectRatio==='9:16'?small:long,height=aspectRatio==='16:9'?small:long;
  const pricingDimensions={width,height,inputSeconds:0,outputSeconds:duration};
- const tokens=Math.ceil(duration*width*height*24/1024);
- return {estimatedUsd:Math.ceil(tokens*2140/1000000)/100,pricingDimensions};
+ return formulaEstimate(pricingDimensions,{creation:true});
 }
 function validatePlan(input){
  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['prompt','duration','resolution','aspectRatio','idempotencyKey'].includes(key)))throw fail('Provide only prompt, duration, resolution, aspectRatio and idempotencyKey.');
@@ -77,7 +77,7 @@ export function createSourceCreationService({db,save,adapter,budgetLimit,importG
     const oldHold=record.reserved&&!record.reservationReleased?record.reservedUsd:0;
     if(!Number.isFinite(oldHold)||oldHold<0||oldHold>db.spend.reserved+1e-8)throw fail('Invalid source creation reservation.');
     try{db.spend=reserve({...db.spend,reserved:Math.max(0,db.spend.reserved-oldHold)},budget(),quote.estimatedUsd);}catch{throw fail('The source estimate or billing hold exceeds the available workspace budget, or the ledger needs review. No generation was submitted.');}
-    record.reserved=true;record.reservationReleased=false;record.reservedUsd=Math.ceil(quote.estimatedUsd*2*1e6)/1e6;await persist();
+    record.reserved=true;record.reservationReleased=false;record.reservedUsd=budgetHold(quote.estimatedUsd);await persist();
     if(!fresh())throw fail('The estimate expired before submission. Recover preparation to check a fresh estimate.');
     // Persist the point of ambiguity before the only potentially billed POST.
     phase='submission';record.submission='attempting';record.phase='Submitting once';await persist();

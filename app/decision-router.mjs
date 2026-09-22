@@ -1,10 +1,11 @@
+import {classifyWithLlm} from './llm-router.mjs';
 import {LOCAL_TOOLS,directLocalTool} from './local-tools.mjs';
 import {EDITOR_WORKFLOWS} from './editor-workflows.mjs';
 // Jev classifies intent only. The editor owns numeric parsing, authorization,
 // validation, previews, and execution. Thresholds are provisional, not calibrated.
 export const DECISION_MODEL = 'jev-1.13.0';
 export const EDIT_ACTIONS = Object.freeze([
-  ...Object.keys(LOCAL_TOOLS), 'mute', 'gain', 'replace_audio', 'replace_picture', 'picture', 'object', 'generate_audio',
+  ...Object.keys(LOCAL_TOOLS), 'mute', 'gain', 'replace_audio', 'replace_picture', 'picture', 'object', 'background', 'generate_audio',
   'apply', 'undo', 'export', 'play', 'pause', 'seek', 'select_range',
   'open_editor', 'open_media', 'open_history', 'open_activity', 'open_markers', 'add_marker', 'import',
   ...Object.keys(EDITOR_WORKFLOWS), 'clarify', 'unsupported',
@@ -19,6 +20,7 @@ const criteria = Object.freeze({
   replace_audio: 'Replace existing audio with an imported or supplied audio file. Do not generate new audio.',
   replace_picture: 'Replace the picture or video in the selected range using an explicitly uploaded, imported, supplied, existing, or replacement video file named in the current request. This is local file composition, not generation. Do not choose for generic picture replacement, a request for new visuals, or a file mentioned only in a previous request.',
   picture: 'Generate or replace the visual scene in a selected video range. Choose for a generic picture or scene edit when no existing replacement video file is explicitly requested. Do not choose for replacing with an uploaded video file, an object-specific masked edit, crop, trim, or text overlay.',
+  background: 'Replace the background or environment while preserving the selected foreground object unchanged, including background visible through openings. Do not choose for editing the object itself.',
   object: 'Change or remove one specifically identified object using an object mask. Do not choose for replacing the whole scene.',
   generate_audio: 'Generate new audio, music, or a sound effect for the video range. Do not choose for existing audio volume changes or an imported replacement file.',
   apply: 'Accept or apply a prepared candidate preview. Classification is not permission to bypass review or apply a nonexistent candidate.',
@@ -167,6 +169,14 @@ export async function classifyEdit({text, context: rawContext} = {}, {env = proc
     }
   }
 
+  if (env.REASONING_PROVIDER && env.REASONING_PROVIDER !== 'jev') {
+    const answer=await classifyWithLlm({text:redactReferences(text.trim()),context,instructions,criteria,actions:EDIT_ACTIONS},{env,fetchImpl});
+    if(answer.error)return clarify(answer.error);
+    const metadata={confidence:answer.confidence,model:answer.model};
+    if(answer.confidence<0.85)return {...clarify('uncertain_intent'),...metadata};
+    if(answer.action==='replace_picture'&&!/\b(?:uploaded|imported|supplied|existing|replacement) (?:video|clip|footage)\b/.test(normalized))return {...clarify('replacement_video_not_explicit'),...metadata};
+    return resultFor(answer.action,answer.provider,context,metadata);
+  }
   const key = typeof env?.TYPESAFE_API_KEY === 'string' ? env.TYPESAFE_API_KEY.trim() : '';
   if (!key || /[\r\n]/.test(key)) return clarify('router_not_configured');
   try {

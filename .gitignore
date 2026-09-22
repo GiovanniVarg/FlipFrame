@@ -24,3 +24,5 @@ outputs/
 **/*.pth
 **/*.pem
 **/*.key
+
+release-build*/

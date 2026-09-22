@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import path from 'node:path';import {runtimeLayout} from './runtime-layout.mjs';
+test('development keeps existing data and settings paths',()=>{const root=path.resolve('app');assert.deepEqual(runtimeLayout(root,{}),{userRoot:root,dataRoot:path.join(root,'data')});});
+test('portable user state is separate from installation and respects explicit data root',()=>{const root=path.resolve('install'),user=path.resolve('user');assert.deepEqual(runtimeLayout(root,{FLIPFRAME_USER_DIR:user}),{userRoot:user,dataRoot:path.join(user,'data')});assert.equal(runtimeLayout(root,{FLIPFRAME_USER_DIR:user,LAB_DATA_DIR:'custom-data'}).dataRoot,'custom-data');});

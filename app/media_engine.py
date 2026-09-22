@@ -69,18 +69,37 @@ def normalize(source, output, lossless=False):
          '-af', 'aresample=async=1:first_pts=0', '-t', info['duration'], '-movflags', '+faststart', output])
     return probe(output)
 
+class MaskKeyframe(tuple):
+    """Retains the historical (time, points) unpacking API with hole metadata."""
+    def __new__(cls, time, points, holes=()):
+        instance = super().__new__(cls, (time, points))
+        instance.holes = holes
+        return instance
+
+
 def validate_masks(masks, start, end, frame_scope):
     if not masks: raise ValueError('Explicit reviewed polygon masks are required')
+    def polygon(value):
+        pts = np.array(value, dtype=float)
+        if pts.ndim != 2 or pts.shape[1] != 2 or not 3 <= len(pts) <= 500 or not np.isfinite(pts).all():
+            raise ValueError('Each polygon needs 3..500 finite [x,y] vertices')
+        if (pts < 0).any() or (pts > 1).any(): raise ValueError('Polygon coordinates must be normalized to [0,1]')
+        return pts
     result = []
     for mask in masks:
         t = finite(mask['time'], 'mask time')
-        pts = np.array(mask['points'], dtype=float)
-        if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) < 3 or not np.isfinite(pts).all():
-            raise ValueError('Each polygon needs at least three finite [x,y] vertices')
-        if (pts < 0).any() or (pts > 1).any(): raise ValueError('Polygon coordinates must be normalized to [0,1]')
-        result.append((t, pts))
+        pts = polygon(mask['points'])
+        raw_holes = mask.get('holes', [])
+        if not isinstance(raw_holes, list) or len(raw_holes) > 64:
+            raise ValueError('A mask supports up to 64 hole polygons')
+        holes = [polygon(hole) for hole in raw_holes]
+        outer = pts.astype(np.float32)
+        if any(cv2.pointPolygonTest(outer, tuple(map(float, vertex)), False) < 0 for hole in holes for vertex in hole):
+            raise ValueError('Hole vertices must stay inside the object outline')
+        result.append(MaskKeyframe(t, pts, holes))
     result.sort(key=lambda item: item[0])
-    if len({len(p) for _, p in result}) != 1: raise ValueError('All mask keyframes require matching vertex counts')
+    if not any(item.holes for item in result) and len({len(p) for _, p in result}) != 1:
+        raise ValueError('All mask keyframes require matching vertex counts')
     if len({t for t, _ in result}) != len(result): raise ValueError('Mask keyframe times must be unique')
     first_time = math.ceil(start*30-1e-7)/30
     last_time = (math.ceil(end*30-1e-7)-1)/30
@@ -90,14 +109,20 @@ def validate_masks(masks, start, end, frame_scope):
         raise ValueError('Frame mask must correspond to the selected frame')
     return result
 
+
 def mask_at(masks, time, width, height):
-    points = masks[0][1]
-    for (a, p), (b, q) in zip(masks, masks[1:]):
-        if a <= time <= b:
-            points = p + (q - p) * ((time-a)/(b-a)); break
-        if time > b: points = q
+    chosen = min(masks, key=lambda item:abs(item[0]-time))
+    points, holes = chosen[1], getattr(chosen, 'holes', ())
+    # Hole count and topology can change between frames. Never morph a cavity
+    # through foreground: use the nearest actual frame's complete geometry.
+    if not any(getattr(item, 'holes', ()) for item in masks):
+        for (a, p), (b, q) in zip(masks, masks[1:]):
+            if a <= time <= b:
+                points = p + (q - p) * ((time-a)/(b-a)); break
     mask = np.zeros((height, width), np.uint8)
     cv2.fillPoly(mask, [np.rint(points * [width-1, height-1]).astype(np.int32)], 255)
+    for hole in holes:
+        cv2.fillPoly(mask, [np.rint(hole * [width-1, height-1]).astype(np.int32)], 0)
     return mask
 
 def composite(original, candidate, mask):
@@ -434,8 +459,52 @@ def prepare_reference(request):
     image.save(request['output'],format='PNG')
     return {'width':image.width,'height':image.height,'mimeType':'image/png'}
 
+def video_packet_count(source):
+    # Matroska CAP_PROP_FRAME_COUNT is often inferred from container duration,
+    # including a slightly longer audio tail. Count actual encoded video packets.
+    result=run(['-loglevel','error','-nostats','-progress','pipe:1','-i',source,
+                '-map','0:v:0','-c:v','copy','-f','null','-'])
+    counts=[int(line.split('=',1)[1]) for line in result.stdout.decode().splitlines()
+            if line.startswith('frame=') and line.split('=',1)[1].strip().isdigit()]
+    if not counts or counts[-1]<=0: raise ValueError('Could not count source video frames')
+    return counts[-1]
+
+
+def playback_preview(request):
+    """Fast viewing copy only. The verified master stays untouched for export."""
+    source,output=request['source'],request['output']
+    if pathlib.Path(source).resolve()==pathlib.Path(output).resolve() or (os.path.exists(output) and os.path.samefile(source,output)):
+        raise ValueError('Output must differ from source')
+    info=probe(source)
+    if abs(info['fps']-30)>.01:
+        raise ValueError('Playback preview requires the 30fps project video')
+    scale=min(1.,1280/info['width'],720/info['height'])
+    width=max(2,int(info['width']*scale)//2*2)
+    height=max(2,int(info['height']*scale)//2*2)
+    encoded=run(['-nostats','-progress','pipe:1','-i',source,'-map','0:v:0','-map','0:a:0?',
+         '-vf',f'scale={width}:{height}:flags=lanczos,setsar=1','-fps_mode','passthrough',
+         '-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p',
+         '-g','30','-keyint_min','30','-sc_threshold','0','-threads','4',
+         '-c:a','aac','-b:a','160k','-movflags','+faststart','-f','mp4',output])
+    actual=probe(output)
+    # With fps_mode=passthrough there is no frame duplication/drop or retiming.
+    # Count frames reported by the actual decode/encode, not source metadata.
+    counts=[int(line.split('=',1)[1]) for line in encoded.stdout.decode().splitlines()
+            if line.startswith('frame=') and line.split('=',1)[1].strip().isdigit()]
+    if not counts or counts[-1]<=0: raise ValueError('Could not verify encoded frame count')
+    source_frames=counts[-1]
+    # Our H264 MP4 output has one encoded video packet per frame.
+    if video_packet_count(output)!=source_frames or abs(actual['duration']-info['duration'])>1/30+1e-6:
+        raise ValueError('Playback copy did not preserve the video timeline')
+    if actual['hasAudio']!=info['hasAudio']:
+        raise ValueError('Playback copy did not preserve audio availability')
+    return {'output':str(pathlib.Path(output).resolve()),**actual,'viewingCopy':True,
+            'note':'Compressed viewing copy. Export uses the verified original-quality video.'}
+
+
 def main(request):
     action = request.get('action','render')
+    if action == 'playback_preview': return playback_preview(request)
     if action == 'object_reference': return object_reference(request)
     if action == 'probe': return probe(request['source'])
     if action == 'track': return track(request)

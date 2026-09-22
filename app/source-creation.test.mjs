@@ -16,11 +16,11 @@ function fixture(){
 async function execute(f,plan){await f.service.execute('alice',plan.id);await f.service.waitForIdle(plan.id);return f.service.get('alice',plan.id);}
 
 test('plans are validated, owner protected, immutable and idempotent without a network call',()=>{
- const f=fixture(),a=f.service.plan('alice',request),same=f.service.plan('alice',request);assert.equal(a.id,same.id);assert.equal(a.status,'planned');assert.equal(a.estimatedUsd,1.98);assert.deepEqual(f.calls,{estimate:0,submit:0,poll:0,import:0});
+ const f=fixture(),a=f.service.plan('alice',request),same=f.service.plan('alice',request);assert.equal(a.id,same.id);assert.equal(a.status,'planned');assert.equal(a.estimatedUsd,1.972224);assert.deepEqual(f.calls,{estimate:0,submit:0,poll:0,import:0});
  assert.throws(()=>f.service.plan('alice',{...request,prompt:'different'}),{status:409});assert.throws(()=>f.service.get('bob',a.id),{status:404});assert.deepEqual(f.service.list('bob'),[]);
  assert.notEqual(f.service.plan('bob',request).id,a.id);
  for(const patch of [{duration:3},{duration:11},{duration:4.5},{resolution:'1080p'},{aspectRatio:'4:3'},{prompt:' '},{prompt:'x'.repeat(3001)},{approvedEstimateUsd:10},{idempotencyKey:'short'}])assert.throws(()=>f.service.plan('alice',{...request,...patch}));
- assert.equal(sourceCreationEstimate({...request,resolution:'480p'}).estimatedUsd,.93);
+ assert.equal(sourceCreationEstimate({...request,resolution:'480p'}).estimatedUsd,.920372);
  assert.deepEqual(sourceCreationEstimate({...request,aspectRatio:'9:16'}).pricingDimensions,{width:768,height:1280,inputSeconds:0,outputSeconds:4});
 });
 

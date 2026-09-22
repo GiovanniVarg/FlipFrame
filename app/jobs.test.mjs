@@ -8,3 +8,13 @@ test('known accepted ID can reconcile an unknown response',()=>{assert.equal(rec
 test('saved candidates expose their actual interval for review',()=>{const j=publicJob({id:'j',result:{id:'c',url:'/media/c.mp4'},generation:{start:1,end:4,operation:'picture'}});assert.equal(j.result.start,1);assert.equal(j.result.end,4);assert.equal(j.result.operation,'picture')});
 
 test('incomplete completed output cannot advertise a recovery that adds missing frames',()=>{assert.equal(recoverable({status:'failed',failureCode:'OUTPUT_TOO_SHORT',generation:{},providerState:{requestId:'r',status:'completed'}}),false)});
+
+test('confirmed charges require reconciliation and never expose evidence notes',()=>{
+ const estimated={status:'completed',quote:{estimatedUsd:4.8,reservedUsd:9.6}};
+ assert.equal(publicJob(estimated).confirmedCharge,undefined);
+ const result=publicJob({...estimated,reconciliation:{actualUsd:0.094,outcome:'completed',at:'2026-09-22T00:00:00Z',evidence:'private operator evidence'}});
+ assert.deepEqual(result.confirmedCharge,{actualUsd:0.094,outcome:'completed',confirmedAt:'2026-09-22T00:00:00Z'});
+ assert.ok(!JSON.stringify(result).includes('private operator'));
+ assert.equal(publicJob({...estimated,reconciliation:{actualUsd:0,outcome:'failed'}}).confirmedCharge.actualUsd,0);
+ for(const r of [{actualUsd:-1,outcome:'completed'},{actualUsd:NaN,outcome:'completed'},{actualUsd:1,outcome:'running'}])assert.equal(publicJob({...estimated,reconciliation:r}).confirmedCharge,undefined);
+});

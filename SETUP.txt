@@ -1,6 +1,6 @@
 FlipFrame — development setup
 =============================
-Private source repository for the conversation-first video editor.
+Source setup for the conversation-first video editor. For the Windows portable edition, extract the ZIP and open FlipFrame.exe; see README.md.
 
 Prerequisites: Git, Node.js 24, Python 3.10+ (Python 3.10 recommended for the supplied Windows SAM2 setup).
 

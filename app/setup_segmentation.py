@@ -5,7 +5,7 @@ runtime/model directories. Git and Python>=3.10 are required. Docker image build
 are unverified here because Docker is unavailable on this host.
 """
 import pathlib, subprocess, sys, os, urllib.request, venv, hashlib, json
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(os.environ.get('FLIPFRAME_USER_DIR', str(pathlib.Path(__file__).resolve().parent)))
 ENV = pathlib.Path(os.environ.get('SAM2_ENV_ROOT', str(ROOT / '.segmentation-env')))
 SOURCE = ROOT / '.segmentation' / 'sam2'
 CHECKPOINT = pathlib.Path(os.environ.get('SAM2_CHECKPOINT', str(ROOT / '.segmentation' / 'sam2.1_hiera_tiny.pt')))

@@ -1,0 +1,5 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {modelConnections,reasoningConfigured} from './model-connections.mjs';
+test('registry preserves Jev default and never exposes credentials',()=>{const result=modelConnections({TYPESAFE_API_KEY:'private-test-secret',LLM_API_KEY:'other-test-secret'});assert.equal(result.reasoning.provider,'jev');assert.equal(result.reasoning.configured,true);assert.ok(!JSON.stringify(result).includes('secret'));assert.equal(result.video.providers.length,1);assert.equal(result.video.providers[0].nativeMasks,false);assert.equal(result.video.extension.requiresImplementation,true);});
+test('only configured supported reasoning adapters are ready',()=>{assert.equal(reasoningConfigured({REASONING_PROVIDER:'unknown',LLM_MODEL:'test',LLM_API_KEY:'fake'}),false);assert.equal(reasoningConfigured({REASONING_PROVIDER:'gemini',LLM_MODEL:'test',LLM_API_KEY:'fake'}),true);assert.equal(reasoningConfigured({REASONING_PROVIDER:'openai-compatible',LLM_MODEL:'local',LLM_BASE_URL:'http://localhost:11434/v1'}),true);});

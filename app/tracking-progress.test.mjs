@@ -34,3 +34,11 @@ test('cancellation rejects running renders and all provider jobs',()=>{
  assert.equal(cancellableLocal({status:'queued',provider:'higgsfield'}),false);
  assert.equal(cancellableLocal({status:'completed',workRequest:{kind:'segment'}}),false);
 });
+
+test('background render stages have bounded counts and action-specific timeout',async()=>{
+ const {mediaWorkerTimeout,progressPhase}=await import('./tracking-progress.mjs');
+ for(const stage of ['compositing','encoding','verifying'])assert.deepEqual(trackingProgress('FLIPFRAME_PROGRESS '+JSON.stringify({stage,completed:3,total:30})),{stage,completed:3,total:30});
+ assert.equal(trackingProgress('FLIPFRAME_PROGRESS {"stage":"download-secrets","completed":0,"total":1}'),null);
+ assert.equal(mediaWorkerTimeout('background_replace'),7200000);assert.equal(mediaWorkerTimeout('normalize'),7200000);assert.equal(mediaWorkerTimeout('segment_video'),600000);
+ assert.equal(progressPhase('encoding'),'Saving video');assert.equal(progressPhase('verifying'),'Checking preserved pixels');
+});

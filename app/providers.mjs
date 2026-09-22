@@ -1,3 +1,4 @@
+import {formulaEstimate} from './pricing.mjs';
 import { createHiggsfieldClient } from '@higgsfield/client/v2';
 // Contracts verified against Higgsfield's public API reference, September 19, 2026.
 // https://open.higgsfield.ai/models/bytedance/seedance-2.5/video-edit/api-reference
@@ -170,12 +171,8 @@ function describedVideoEditEstimate(data, input, endpoint, body) {
   if (textToVideo && outputSeconds < body.duration) throw new Error('Pricing output seconds must cover the requested generation duration.');
   const resolution = Number((body.resolution || '720p').slice(0, -1));
   if (Math.min(width, height) < resolution) throw new Error('Pricing dimensions must conservatively cover the selected output resolution.');
-  const tokens = Math.ceil((inputSeconds + outputSeconds) * width * height * 24 / 1024);
-  if (!Number.isSafeInteger(tokens)) throw new Error('Pricing dimensions exceed safe arithmetic limits.');
-  // Rates: edit 1.284 cents / 1000 tokens; text-to-video 2.14 cents. Round upward to a full cent.
-  const amount = Math.ceil(tokens * (textToVideo ? 2140 : 1284) / 1000000) / 100;
-  return { verified: false, formulaVerified: true, isHardCap: false, endpoint, maximumUsd: amount, estimatedUsd: amount,
-    billableVideoTokens: tokens, pricingDimensions: { width, height, inputSeconds, outputSeconds },
+  const details=formulaEstimate({width,height,inputSeconds,outputSeconds},{creation:textToVideo,basis:'provider-formula'});
+  return { ...details, rateSourceUrl:`https://open.higgsfield.ai/models/${endpoint}/api-reference`, verified: false, formulaVerified: true, isHardCap: false, endpoint, maximumUsd: details.estimatedUsd,
     body, bodyFingerprint: JSON.stringify(body), quotedAt: new Date().toISOString(), source: 'provider-described-formula',
     assumption: 'Caller dimensions and durations are reservation assumptions, not provider-enforced output limits.' };
 }
@@ -195,7 +192,7 @@ export async function estimateGeneration(input, { env = process.env, fetchImpl =
   if (!['string', 'number'].includes(typeof data.usd) || String(data.usd).trim() === '') throw new Error('Provider estimate is missing its USD amount.');
   const amount = Number(data.usd);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('Provider estimate has an invalid USD amount.');
-  return { verified: true, isHardCap: false, endpoint, maximumUsd: amount, estimatedUsd: amount, credits: data.credits, body, bodyFingerprint: JSON.stringify(body), quotedAt: new Date().toISOString(), source: 'authenticated-provider-estimate' };
+  return { verified: true, isHardCap: false, endpoint, maximumUsd: amount, estimatedUsd: amount, credits: data.credits, body, bodyFingerprint: JSON.stringify(body), quotedAt: new Date().toISOString(), pricingBasis: 'authenticated-provider-estimate', source: 'authenticated-provider-estimate' };
 }
 
 // The upload destination is signed storage selected by Higgsfield, not the API origin.

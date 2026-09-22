@@ -1,3 +1,4 @@
+import {formulaEstimate,preparedShape,assumedOutputShape} from './pricing.mjs';
 import {LOCAL_TOOLS,directLocalTool,localParameters} from './local-tools.mjs';
 import {precisionRecolor} from './precision-recolor.mjs';
 import {EDITOR_WORKFLOWS} from './editor-workflows.mjs';
@@ -5,9 +6,9 @@ import {ownedReference} from './reference-images.mjs';
 import {randomUUID,createHash} from 'node:crypto';
 import {validateEdit} from './domain.mjs';
 const stamp=()=>new Date().toISOString();
-const labels={...Object.fromEntries(Object.entries(LOCAL_TOOLS).map(([id,t])=>[id,t.title])),...Object.fromEntries(Object.entries(EDITOR_WORKFLOWS).map(([key,w])=>[key,w.title])),mute:'Mute the selected sound',gain:'Adjust the selected volume',replace_audio:'Use your replacement audio',replace_picture:'Use your replacement video',picture:'Create a picture edit',object:'Change a selected object',generate_audio:'Create a new soundtrack',apply:'Apply the reviewed candidate',undo:'Restore the previous revision',export:'Download the current revision',play:'Play your video',pause:'Pause playback',seek:'Go to a moment',select_range:'Select an edit range',open_editor:'Open precise editing controls',open_media:'Open your media',open_history:'Open revision history',open_activity:'Open project activity',open_markers:'Open saved moments',add_marker:'Save a moment',import:'Import another video',clarify:'Let’s make the edit precise',unsupported:'This edit needs another workflow'};
+const labels={...Object.fromEntries(Object.entries(LOCAL_TOOLS).map(([id,t])=>[id,t.title])),...Object.fromEntries(Object.entries(EDITOR_WORKFLOWS).map(([key,w])=>[key,w.title])),mute:'Mute the selected sound',gain:'Adjust the selected volume',replace_audio:'Use your replacement audio',replace_picture:'Use your replacement video',picture:'Create a picture edit',background:'Change the background',object:'Change a selected object',generate_audio:'Create a new soundtrack',apply:'Apply the reviewed candidate',undo:'Restore the previous revision',export:'Download the current revision',play:'Play your video',pause:'Pause playback',seek:'Go to a moment',select_range:'Select an edit range',open_editor:'Open precise editing controls',open_media:'Open your media',open_history:'Open revision history',open_activity:'Open project activity',open_markers:'Open saved moments',add_marker:'Save a moment',import:'Import another video',clarify:'Let’s make the edit precise',unsupported:'This edit needs another workflow'};
 const uiActions={...Object.fromEntries(Object.entries(EDITOR_WORKFLOWS).map(([key,w])=>[key,w.uiAction])),export:'export',play:'play',pause:'pause',seek:'seek',select_range:'select_range',open_editor:'editor',open_media:'media',open_history:'history',open_activity:'activity',open_markers:'markers',add_marker:'add_marker',import:'import'};
-const manualIntents=new Set([...Object.keys(LOCAL_TOOLS),...Object.keys(EDITOR_WORKFLOWS),'mute','gain','replace_audio','replace_picture','picture','object','generate_audio']);
+const manualIntents=new Set([...Object.keys(LOCAL_TOOLS),...Object.keys(EDITOR_WORKFLOWS),'mute','gain','replace_audio','replace_picture','picture','object','background','generate_audio']);
 function seconds(raw){if(raw.includes(':')){const [m,s]=raw.split(':').map(Number);if(s>=60)throw new Error('Invalid timestamp');return m*60+s;}return Number(raw);}
 export function computeGenerationWindow(p,start,end,resolution='720p'){
  if(!['480p','720p'].includes(resolution))throw new Error('Unsupported resolution');
@@ -16,13 +17,13 @@ export function computeGenerationWindow(p,start,end,resolution='720p'){
  let processStart=Math.max(0,start-1),processEnd=Math.min(p.duration,end+1);
  if(processEnd-processStart<4){processEnd=Math.min(p.duration,processStart+4);processStart=Math.max(0,processEnd-4);}
  if(processEnd-processStart>30)throw new Error('Select a shorter range: at most 30 seconds including context.');
- const width=Math.ceil(p.width*short/Math.min(p.width,p.height)/64)*64,height=Math.ceil(p.height*short/Math.min(p.width,p.height)/64)*64;
+ const prepared=preparedShape(p.width,p.height,resolution);const {width,height}=assumedOutputShape(prepared.width,prepared.height);
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)throw new Error('Video dimensions are required');
  const tailPadding=Math.max(0,Math.ceil((.5-(processEnd-end))*30-1e-7)/30);
  const duration=processEnd-processStart+tailPadding;
  if(duration>30)throw new Error('Select a shorter range to leave half a second of end protection.');
- const estimatedUsd=Math.ceil((Math.ceil(2*duration*width*height*24/1024)*0.01284/1000)*100)/100;
- return {processStart,processEnd,tailPadding,resolution,pricingDimensions:{width,height,inputSeconds:duration,outputSeconds:duration},estimatedUsd};
+ const pricingEstimate=formulaEstimate({width,height,inputSeconds:duration,outputSeconds:duration});const estimatedUsd=pricingEstimate.estimatedUsd;
+ return {processStart,processEnd,tailPadding,resolution,pricingDimensions:{width,height,inputSeconds:duration,outputSeconds:duration},estimatedUsd,pricingEstimate};
 }
 export function buildEditPlan(p,input,decision){
  if(input.baseRevisionId!==p.activeRevisionId)throw new Error('Project revision changed. Send the edit again for the current revision.');
@@ -70,23 +71,24 @@ export function buildEditPlan(p,input,decision){
   plan.warnings=['Review the tracked surface mask. Matching colors anywhere inside that mask can change; neutral pixels and pixels outside it stay original. This changes hue, not material or geometry.'];return plan;
  }
  if(uiActions[action]){plan.route.kind='ui';plan.uiAction=uiActions[action];plan.explanation=EDITOR_WORKFLOWS[action]?.description||'Use this action to move around your project. Your footage is unchanged.';return plan;}
- if(['clarify','unsupported'].includes(action)){plan.status='needs_input';plan.explanation=action==='unsupported'?'I cannot perform that operation yet. I can edit picture, sound or a reviewed object region, and help you compare, apply, undo and export.':'Choose the kind of change: picture, object, or sound. I’ll use your instruction to prepare a plan for review.';if(decision.reason)plan.warnings.push(decision.reason==='router_authentication_failed'?'The language router could not authenticate. The workspace operator needs to check its TypeSafe credential. Built-in commands remain available.':decision.reason==='router_not_configured'?'The language router is not configured. Try a built-in command such as “mute from 1 to 3 seconds”.':'I could not confidently map this request to one available action. No video generation was submitted.');return plan;}
+ if(['clarify','unsupported'].includes(action)){plan.status='needs_input';plan.explanation=action==='unsupported'?'I cannot perform that operation yet. I can edit picture, sound or a reviewed object region, and help you compare, apply, undo and export.':'Choose the kind of change: picture, object, or sound. I’ll use your instruction to prepare a plan for review.';if(decision.reason)plan.warnings.push(decision.reason==='router_authentication_failed'?'Your assistant could not sign in. Check the API key for your selected service in Settings. Built-in commands still work.':decision.reason==='router_not_configured'?'The language router is not configured. Try a built-in command such as “mute from 1 to 3 seconds”.':'I could not confidently map this request to one available action. No video generation was submitted.');return plan;}
  if(action==='mute'){plan.explanation='Mute only this interval. Keep the picture and the rest of the soundtrack.';plan.operation='mute';}
  if(action==='gain'){const m=text.match(/([+-]?\d+(?:\.\d+)?)\s*dB\b/i);if(!m){plan.status='needs_input';plan.explanation='Specify the volume change in dB, such as “Lower the volume by 6 dB.”';return plan;}let gain=Number(m[1]);if(/\b(?:lower|reduce|decrease|quieter|down)\b/i.test(text))gain=-Math.abs(gain);if(gain< -60||gain>12)throw new Error('Gain must be between -60 and 12 dB');plan.gainDb=gain;plan.operation='gain';plan.explanation=`Change volume by ${gain>0?'+':''}${gain} dB in this interval. Keep the picture.`;}
  if(action==='replace_audio'){plan.operation='replace_audio';plan.status='needs_input';plan.uiAction='upload_audio';plan.explanation='Choose a replacement audio file in the editor, then run this plan. Only the selected soundtrack interval changes.';}
  if(action==='replace_picture'){plan.operation='picture';plan.status='needs_input';plan.uiAction='upload_video';plan.explanation='Choose your replacement video in the editor, then run this plan. Keep the source soundtrack and all picture outside the interval.';}
  if(action==='apply'){plan.explanation='Make the selected reviewed candidate the current revision. You can undo this.';}
  if(action==='undo'){plan.explanation='Return to the parent revision. Saved candidates and revision history stay available.';}
- if(['picture','object','generate_audio'].includes(action)){
+ if(['picture','object','background','generate_audio'].includes(action)){
   const resolution=input.quality==='draft'?'480p':'720p';const window=computeGenerationWindow(p,start,end,resolution);
   plan.processStart=window.processStart;plan.processEnd=window.processEnd;plan.inputDuration=window.pricingDimensions.inputSeconds;
   if(window.tailPadding>0)plan.warnings.push(`Includes ${window.tailPadding.toFixed(2)}s of repeated-frame input tail protection, priced into this estimate and excluded from your edit.`);
-  plan.route={id:'seedance-2.5-video-edit',label:`Seedance 2.5 · ${resolution}`,kind:'higgsfield',resolution,estimatedUsd:window.estimatedUsd,costLabel:`Estimated $${window.estimatedUsd.toFixed(2)} · hold $${(window.estimatedUsd*2).toFixed(2)}`};
+  plan.route={id:'seedance-2.5-video-edit',label:`Seedance 2.5 · ${resolution}`,kind:'higgsfield',resolution,estimatedUsd:window.estimatedUsd,pricingEstimate:window.pricingEstimate,costLabel:`Estimated $${window.estimatedUsd.toFixed(2)} · hold $${(window.estimatedUsd*2).toFixed(2)}`};
   plan.operation=action==='generate_audio'?'replace_audio':action;plan.generationKind=action==='generate_audio'?'audio':'video';
-  plan.explanation=action==='generate_audio'?'Generate a soundtrack through Higgsfield, then apply only its audio to this interval. Keep your picture.':action==='object'?'Generate replacement footage through Higgsfield and compose only your reviewed object region.':'Generate replacement footage through Higgsfield. Change only the selected picture interval and keep the soundtrack.';
+  plan.explanation=action==='background'?'Generate a new background and keep the reviewed object from your original video, including openings in its mask. Audio stays unchanged.':action==='generate_audio'?'Generate a soundtrack through Higgsfield, then apply only its audio to this interval. Keep your picture.':action==='object'?'Generate replacement footage through Higgsfield and compose only your reviewed object region.':'Generate replacement footage through Higgsfield. Change only the selected picture interval and keep the soundtrack.';
   plan.warnings.push('Pricing preview uses the last verified token rate and conservative dimensions. A fresh estimate is checked before submission. Estimates are not guaranteed billing caps.');
   if(resolution==='480p')plan.warnings.push('Draft uses 480p generation and is scaled to your project. Fine detail may be softer; this is not a final-quality guarantee.');
-  if(action==='object'){plan.status='needs_input';plan.uiAction='select_object';plan.warnings.push('Draw or track the object and review its boundary before running this plan. Jev cannot see or identify the object.');}
+  if(['object','background'].includes(action)){plan.requiresMask=true;plan.status='needs_input';plan.uiAction='select_object';plan.warnings.push('Draw or track the object and review its boundary before running this plan. The assistant cannot see or identify the object.');}
+  if(action==='background')plan.warnings.push('Keep the object selected. Openings must be excluded from the mask so the new background shows through. Review every frame; missing masks leave the original frame unchanged.');
   if(window.estimatedUsd>5){plan.status='needs_input';plan.warnings.push('This exceeds the $5 per-request estimate limit. Select a shorter interval or explicitly choose Draft.');}
  }
  return plan;

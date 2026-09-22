@@ -123,3 +123,11 @@ test('correction drafts retain scoped protection and reject foreign candidates',
 });
 
 test('named object selections survive reload independently and reject nested or duplicate entries',()=>{const f=fixture();const a={name:'Car',start:1,end:3,scope:'range',masks:[{time:1,points:polygon},{time:2,points:polygon}],visibleRanges:[],gaps:[]};const b={...a,name:'Plant'};const saved=f.service.write('p','alice',input({editor:{objectName:'Car',objectSelections:[a,b]}}));assert.deepEqual(saved.editor.objectSelections,[a,b]);saved.editor.objectSelections[0].masks[0].points[0][0]=.9;assert.equal(f.service.read('p','alice').editor.objectSelections[0].masks[0].points[0][0],.1);assert.throws(()=>f.service.write('p','alice',{...input({editor:{objectSelections:[a,a]}}),expectedVersion:1}),/unique/);assert.throws(()=>f.service.write('p','alice',{...input({editor:{objectSelections:[{...a,objectSelections:[]}]}}),expectedVersion:1}),/unsupported/);});
+
+test('background drafts retain normalized opening rings through save and reload',()=>{
+ const f=fixture(),hole=[[.2,.2],[.3,.2],[.3,.3]];
+ const draft=f.service.write('p','alice',input({editor:{mode:'background',operation:'background',masks:[{time:1,points:polygon,holes:[hole]}]}}));
+ assert.equal(draft.editor.mode,'background');assert.deepEqual(draft.editor.masks[0].holes,[hole]);
+ assert.deepEqual(f.service.read('p','alice').editor.masks[0].holes,[hole]);
+ for(const holes of [Array(65).fill(hole),[[[2,.2],[.3,.2],[.3,.3]]],[[[.2,.2]]],[Array(501).fill([.2,.2])]])assert.throws(()=>f.service.write('p','alice',input({expectedVersion:1,editor:{masks:[{time:1,points:polygon,holes}]}})),{status:400});
+});

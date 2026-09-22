@@ -33,8 +33,8 @@ function editorDraft(value,project,db){
 
  for(const key of ['start','end','time'])if(own(value,key))result[key]=finite(value[key],0,project.duration,key);
  if(own(result,'start')&&own(result,'end')&&result.end<=result.start)throw failure('Draft range must end after its start.');
- if(own(value,'mode'))result.mode=choice(value.mode,['picture','audio','object'],'editor mode');
- if(own(value,'operation'))result.operation=choice(value.operation,['mute','gain','replace_audio'],'audio operation');
+ if(own(value,'mode'))result.mode=choice(value.mode,['picture','audio','object','background'],'editor mode');
+ if(own(value,'operation'))result.operation=choice(value.operation,['mute','gain','replace_audio','background'],'audio operation');
  if(own(value,'scope'))result.scope=choice(value.scope,['frame','range'],'object scope');
  if(own(value,'gain'))result.gain=finite(value.gain,-60,12,'Gain');
  if(own(value,'prompt'))result.prompt=text(value.prompt,3000,'Prompt');
@@ -43,10 +43,11 @@ function editorDraft(value,project,db){
  if(own(value,'masks')){
   if(!Array.isArray(value.masks)||value.masks.length>1800)throw failure('Draft accepts at most 1800 masks.');let prior=-1;
   result.masks=value.masks.map(mask=>{
-   record(mask,['time','points','confidence','visible','reviewRequired','method'],'Mask');const time=finite(mask.time,0,project.duration,'Mask time');
+   record(mask,['time','points','holes','confidence','visible','reviewRequired','method'],'Mask');const time=finite(mask.time,0,project.duration,'Mask time');
    if(time<=prior)throw failure('Mask times must be ordered and unique.');prior=time;
    const points=polygon(mask.points,3,500,'Mask polygon');
-   return {time,points,...(own(mask,'confidence')&&mask.confidence!==null?{confidence:finite(mask.confidence,0,1,'Mask confidence')}:{})};
+   let holes;if(own(mask,'holes')){if(!Array.isArray(mask.holes)||mask.holes.length>64)throw failure('Use up to 64 openings per mask.');holes=mask.holes.map(hole=>polygon(hole,3,500,'Mask opening'));}
+   return {time,points,...(holes?{holes}:{}),...(own(mask,'confidence')&&mask.confidence!==null?{confidence:finite(mask.confidence,0,1,'Mask confidence')}:{})};
   });
  }
  for(const key of ['visibleRanges','gaps'])if(own(value,key))result[key]=ranges(value[key],project,key==='gaps');

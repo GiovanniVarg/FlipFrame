@@ -7,3 +7,8 @@ test('reviewed object transformation needs no repeated selection instructions',(
 test('explicit object instruction retains intent with camera and background constraints',()=>{assert.equal(selectionIntent('Edit the selected object: car becomes a robot. Preserve background and camera.',true),'object');assert.equal(selectionIntent('Edit the selected object: car becomes a robot.',false),undefined);});
 
 test('explicit whole-scene request cannot inherit selected-object routing',()=>{for(const ready of [true,false])assert.equal(selectionIntent('Edit the entire scene: robot camera orbit',ready),'picture');});
+
+test('explicit background edit keeps a separate foreground-preserving intent',()=>{
+ for(const ready of [false,true])for(const text of ['Change the background to a beach','Replace background with a studio','Edit the background behind the object'])assert.equal(selectionIntent(text,ready),'background');
+ assert.equal(selectionIntent('Do not change the background',true),undefined);
+});

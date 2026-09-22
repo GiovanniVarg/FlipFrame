@@ -1,14 +1,38 @@
+import {assumedOutputShape,publicPriceQuote} from './pricing.mjs';
+import {progressPhase,trackingProgress} from './tracking-progress.mjs';
 import {releaseProviderFailure} from './provider-refunds.mjs';
 import {ownedReference} from './reference-images.mjs';
 import {OBJECT_REPAIR_PHASE,verifiedObjectRepair} from './object-repair-contract.mjs';
 import fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
-import {reserve} from './budget.mjs';
+import {reserve,budgetHold} from './budget.mjs';
 
 const rejectedStatuses=new Set(['failed','nsfw','canceled']);
 const acceptedStatuses=new Set(['queued','in_progress','running']);
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export const GENERATION_QUOTE_LIFETIME_MS=5*60*1000;
+
+// Keep only the latest in-memory progress; never queue one database write per frame.
+export function coalescedProgressWriter(save,{intervalMs=2000,clock=Date.now}={}){
+ let dirty=false,inFlight=null,timer=null,lastWrite=-Infinity,closed=false,failure;
+ const schedule=()=>{
+  if(closed||!dirty||inFlight||timer)return;
+  const wait=Math.max(0,intervalMs-(clock()-lastWrite));
+  if(wait){timer=setTimeout(()=>{timer=null;write();},wait);return;}
+  write();
+ };
+ const write=()=>{
+  if(inFlight||!dirty)return;
+  dirty=false;lastWrite=clock();
+  inFlight=Promise.resolve().then(save).catch(error=>{failure ||= error;}).finally(()=>{inFlight=null;schedule();});
+ };
+ return {mark(){if(closed)return;dirty=true;schedule();},async finish(){
+  closed=true;if(timer){clearTimeout(timer);timer=null;}
+  if(inFlight)await inFlight;
+  if(dirty){write();await inFlight;}
+  if(failure)throw failure;
+ }};
+}
 
 /** Durable provider lifecycle. Callers must persist job.generation before scheduling run(). */
 export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,mediaUrl,download,budgetLimit,pollDelay=5000,pollAttempts=180,now=Date.now}){
@@ -16,13 +40,13 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
  const persist=async()=>{await save();};
  async function execute(job){
   const g=job.generation;
-  if(g&&g.kind!=='audio'&&g.masks?.length)g.operation='object';
+  if(g&&g.kind!=='audio'&&g.masks?.length&&g.operation!=='background')g.operation='object';
   if(!g)throw new Error('Persisted generation context is required');
   if(job.status==='canceled'||job.status==='completed'&&job.result)return job;
   try{
    if(!['video','audio'].includes(g.kind)||typeof g.prompt!=='string'||!g.prompt.trim()||typeof g.source!=='string')throw new Error('Invalid persisted generation inputs');
    if(![g.processStart,g.processEnd,g.start,g.end].every(Number.isFinite)||g.processStart<0||g.start<g.processStart||g.end<=g.start||g.processEnd<g.end||g.processEnd<=g.processStart)throw new Error('Invalid persisted generation interval');
-   if(g.operation==='object'&&g.end-g.start>10)throw new Error('Automatic object repair supports up to 10 seconds. Shorten the selection before generating.');
+   if(['object','background'].includes(g.operation)&&g.end-g.start>10)throw new Error('Automatic object repair supports up to 10 seconds. Shorten the selection before generating.');
    // Stable identities and complete inputs are saved before any external operation.
    g.paths??={clip:mediaPath(randomUUID()),raw:mediaPath(randomUUID()),trimmed:mediaPath(randomUUID()),output:mediaPath(randomUUID(),'webm')};
    g.candidateId??=randomUUID();
@@ -60,7 +84,13 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
      await runMedia({action:'prepare_reference',source:g.referenceImagePath,guide:g.operation==='object'?g.paths.reference:undefined,output:g.paths.userReference});
      g.userReferenceUrl=await adapter.uploadAsset(fs.readFileSync(g.paths.userReference),'image/png');await persist();
     }
-    const objectGuidance=g.referenceImagePath?(g.operation==='object'?' The reference is a labeled two-panel guide: LEFT shows the source selection with darkened surroundings; RIGHT shows the desired appearance supplied by the user. Use the right panel to guide the selected replacement only. Do not reproduce labels, the panel layout or darkening. Preserve unrelated objects and camera timing.':' Use the supplied reference image as the desired visual guidance for this edit. Preserve unrelated content and timing.'):g.operation==='object'?' The reference image identifies the selected object: its surroundings are darkened only as a selection guide. Edit that object consistently wherever it is visible. Do not reproduce the darkening. Preserve camera motion, timing, and unrelated objects.':'';
+    if(fs.existsSync(g.paths.clip)){
+     const measured=await runMedia({action:'probe',source:g.paths.clip});
+     if(!Number.isSafeInteger(measured.width)||measured.width<=0||!Number.isSafeInteger(measured.height)||measured.height<=0||!Number.isFinite(measured.duration)||measured.duration<=0||measured.duration>30+1e-6)throw Error('Prepared clip dimensions or duration are invalid. No generation was submitted.');
+     g.measuredInput={width:measured.width,height:measured.height,duration:measured.duration};
+     g.pricingDimensions={...assumedOutputShape(measured.width,measured.height),inputSeconds:measured.duration,outputSeconds:measured.duration};
+    }
+    const objectGuidance=g.operation==='background'?' Generate the requested background across the entire frame, including behind the foreground object and through its openings. Do not duplicate the foreground object in the generated background. Original foreground pixels will be composited locally. Keep camera motion and timing aligned.':g.referenceImagePath?(g.operation==='object'?' The reference is a labeled two-panel guide: LEFT shows the source selection with darkened surroundings; RIGHT shows the desired appearance supplied by the user. Use the right panel to guide the selected replacement only. Do not reproduce labels, the panel layout or darkening. Preserve unrelated objects and camera timing.':' Use the supplied reference image as the desired visual guidance for this edit. Preserve unrelated content and timing.'):g.operation==='object'?' The reference image identifies the selected object: its surroundings are darkened only as a selection guide. Edit that object consistently wherever it is visible. Do not reproduce the darkening. Preserve camera motion, timing, and unrelated objects.':'';
     const prompt=`Edit the supplied extracted clip. Input clip time 0 equals project time ${g.processStart.toFixed(6)} seconds. The selected interval on THIS CLIP is ${(g.start-g.processStart).toFixed(6)} to ${(g.end-g.processStart).toFixed(6)} seconds. Preserve timing and duration. Any original project timestamps in the edit request refer to the original project, not this cropped clip; the clip-relative interval above is authoritative. Apply the requested change within that interval. Keep surrounding context consistent.\nEdit request: ${g.prompt}${objectGuidance}`;
     const input={kind:g.kind,prompt,videoUrl:g.videoUrl,...((g.userReferenceUrl||g.objectReferenceUrl)?{imageUrls:[g.userReferenceUrl||g.objectReferenceUrl]}:{}),generateAudio:g.kind==='audio',pricingDimensions:g.pricingDimensions,resolution:g.resolution};
     // Refresh on every unsent attempt, including recovery. Persisted quotes are
@@ -68,7 +98,7 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
     // ambiguous requests never enter this branch.
     job.phase='Estimating cost';await persist();
     const quoteRequestedAt=now();
-    g.quote=await adapter.estimateGeneration(input);g.quoteRequestedAt=quoteRequestedAt;await persist();
+    g.quote=await adapter.estimateGeneration(input);g.quoteRequestedAt=quoteRequestedAt;if(g.measuredInput)g.quote.measuredInput=g.measuredInput;await persist();
     if(g.approvedEstimateUsd!==undefined&&(!Number.isFinite(g.approvedEstimateUsd)||g.approvedEstimateUsd<=0||g.quote.estimatedUsd>g.approvedEstimateUsd+1e-8))throw new Error('The fresh provider estimate exceeds the approved plan. Request and review a new plan before generation.');
     const quoteIsFresh=()=>{const current=now();return Number.isFinite(current)&&current>=quoteRequestedAt&&current-quoteRequestedAt<GENERATION_QUOTE_LIFETIME_MS;};
     if(!quoteIsFresh())throw new Error('Provider estimate expired before submission. Resume preparation to check a fresh estimate.');
@@ -79,8 +109,8 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
     if(!Number.isFinite(priorHold)||priorHold<0||priorHold>db.spend.reserved+1e-8)throw new Error('Invalid unsent generation reservation');
     const ledgerWithoutHold={...db.spend,reserved:Math.max(0,db.spend.reserved-priorHold)};
     db.spend=reserve(ledgerWithoutHold,Number(limit),g.quote.estimatedUsd);
-    g.reserved=true;g.reservationReleased=false;g.reservedUsd=Math.ceil(g.quote.estimatedUsd*2*1e6)/1e6;
-    job.quote={estimatedUsd:g.quote.estimatedUsd,reservedUsd:g.reservedUsd};await persist();
+    g.reserved=true;g.reservationReleased=false;g.reservedUsd=budgetHold(g.quote.estimatedUsd);
+    job.quote=publicPriceQuote(g.quote,g.reservedUsd);await persist();
     if(!quoteIsFresh())throw new Error('Provider estimate expired before submission. Resume preparation to check a fresh estimate.');
     // This durable marker deliberately favors no double charge over automatic progress.
     g.submission='attempting';g.submissionInput=input;job.phase='Submitting once';await persist();
@@ -140,18 +170,30 @@ export function createGenerationRunner({db,save,adapter,runMedia,mediaPath,media
     g.trimmed=true;await persist();
    }
    if(!g.composed||!fs.existsSync(g.paths.output)||(g.operation==='object'&&!g.repairVerification)){
-    if(!g.paths.output.endsWith('.webm'))g.paths.output=mediaPath(randomUUID(),'webm');
+    const outputExtension=g.operation==='background'?'mkv':'webm';
+    if(!g.paths.output.endsWith('.'+outputExtension))g.paths.output=mediaPath(randomUUID(),outputExtension);
     job.phase=g.operation==='object'?OBJECT_REPAIR_PHASE:'Composing reviewed selection';await persist();
-    const result=await runMedia({action:g.operation==='object'?'object_repair':'render',source:g.source,output:g.paths.output,reviewOutput:g.operation==='object'?(g.paths.coverage??=mediaPath(randomUUID(),'webm')):undefined,start:g.start,end:g.end,
-     operation:g.kind==='audio'?'replace_audio':g.operation==='object'||g.masks?.length?'object':'picture',
-     audio:g.paths.trimmed,candidate:g.paths.trimmed,masks:g.masks,scope:g.scope,visibleRanges:g.visibleRanges});
+    const progressWrites=coalescedProgressWriter(persist);
+    const updateProgress=progress=>{
+     if(typeof progress==='string'){job.phase=progress;}else{
+      const checked=trackingProgress('FLIPFRAME_PROGRESS '+JSON.stringify(progress));
+      if(!checked)return;job.progress=checked;job.phase=progressPhase(checked.stage);
+     }
+     progressWrites.mark();
+    };
+    delete job.progress;
+    let result;
+    try{result=await runMedia({action:g.operation==='background'?'background_replace':g.operation==='object'?'object_repair':'render',source:g.source,output:g.paths.output,reviewOutput:g.operation==='object'?(g.paths.coverage??=mediaPath(randomUUID(),'webm')):undefined,start:g.start,end:g.end,
+     operation:g.kind==='audio'?'replace_audio':g.operation==='background'?'background':g.operation==='object'||g.masks?.length?'object':'picture',
+     audio:g.paths.trimmed,candidate:g.paths.trimmed,masks:g.masks,scope:g.scope,visibleRanges:g.visibleRanges},updateProgress);}finally{await progressWrites.finish();}
     if(g.operation==='object')g.repairVerification=verifiedObjectRepair(result);
+    if(g.operation==='background')g.precisionVerification=result.precisionVerification;
     g.composed=true;g.note=[result.note,g.timingNote].filter(Boolean).join(' ');await persist();
    }
    const candidate={id:g.candidateId,projectId:job.projectId,baseRevisionId:g.baseRevisionId,url:mediaUrl(g.paths.output),path:g.paths.output,
-    label:g.kind==='audio'?'Higgsfield soundtrack':g.operation==='object'?'Automatic object repair':'Higgsfield picture edit',...(g.paths.coverage?{maskReviewUrl:mediaUrl(g.paths.coverage)}:{}),createdAt:g.completedAt??new Date().toISOString(),note:g.note,...(g.referenceImageId?{referenceImage:ownedReference(db,job.projectId,g.referenceImageId)}:{}),...(g.repairVerification?{repairVerification:g.repairVerification}:{})};
+    label:g.kind==='audio'?'Higgsfield soundtrack':g.operation==='background'?'New background · original object kept':g.operation==='object'?'Automatic object repair':'Higgsfield picture edit',...(g.paths.coverage?{maskReviewUrl:mediaUrl(g.paths.coverage)}:{}),createdAt:g.completedAt??new Date().toISOString(),note:g.note,...(g.referenceImageId?{referenceImage:ownedReference(db,job.projectId,g.referenceImageId)}:{}),...(g.precisionVerification?{precisionVerification:g.precisionVerification}:{}),...(g.repairVerification?{repairVerification:g.repairVerification}:{})};
    g.completedAt=candidate.createdAt;db.candidates[candidate.id]=candidate;
-   const {path:ignored,...safe}=candidate;job.result=safe;job.status='completed';job.phase='Ready to review';job.retryable=false;
+   const {path:ignored,...safe}=candidate;job.result=safe;job.status='completed';job.phase='Ready to review';delete job.progress;job.retryable=false;
    job.billing='Estimate reserved; actual charge not yet reconciled';delete job.error;await persist();
    // Only discard intermediates once the durable candidate record references the finished export.
    // A cleanup failure must never turn successful, paid work into a failed generation.

@@ -2,6 +2,7 @@ import {directLocalTool} from './local-tools.mjs';
 export function selectionIntent(text,ready){
  if(typeof text!=='string')return undefined;
  if(/^\s*edit the entire scene:\s*\S/i.test(text))return 'picture';
+ if(/^\s*(?:change|replace|edit) (?:the )?(?:selected )?background\b/i.test(text)&&! /\b(?:not|never|don.t|instead)\b/i.test(text))return 'background';
  if(!ready)return undefined;
  if(directLocalTool(text))return undefined;
  // An explicit object command supplies intent; the confirmation still controls execution.

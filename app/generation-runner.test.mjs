@@ -22,7 +22,7 @@ function fixture(t){
   mediaPath:id=>path.join(dir,id+'.mp4'),mediaUrl:file=>'/media/'+path.basename(file),
   async download(url,file){calls.download++;fs.writeFileSync(file,'downloaded');},
   async runMedia(request){
-   if(request.action==='probe')return {duration:4,hasAudio:true};
+   if(request.action==='probe')return {width:1280,height:720,duration:4,hasAudio:true};
    if(request.action==='render'){calls.render++;if(failRender)throw new Error('Local encoder interrupted');}
    if(request.action==='extract')calls.extract++;
    fs.writeFileSync(request.output,'media');return {note:'actual pixels composed',...(request.action==='object_repair'?{ok:true,verifiedFrames:120,framesRepaired:60}:{})};
@@ -107,7 +107,7 @@ test('incomplete download file is replaced safely on recovery',async t=>{
 test('pre-submit upload failure can retry and passes pricing dimensions to quote',async t=>{
  const f=fixture(t);let shouldFail=true;f.job.generation.pricingDimensions={duration:4,resolution:'720p'};
  const original=f.adapter.uploadAsset;f.adapter.uploadAsset=async(...args)=>{if(shouldFail)throw new Error('Upload unavailable');return original(...args);};
- f.adapter.estimateGeneration=async input=>{assert.deepEqual(input.pricingDimensions,{duration:4,resolution:'720p'});return {estimatedUsd:.2};};
+ f.adapter.estimateGeneration=async input=>{assert.deepEqual(input.pricingDimensions,{width:1280,height:768,inputSeconds:4,outputSeconds:4});return {estimatedUsd:.2};};
  await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.equal(f.job.retryable,true);assert.equal(f.calls.submit,0);
  assert.ok(fs.existsSync(f.job.generation.paths.clip));shouldFail=false;
  await f.runner().run(f.job);assert.equal(f.job.status,'completed');assert.equal(f.calls.submit,1);
@@ -131,7 +131,7 @@ test('resolution and rounded reservation are preserved exactly',async t=>{
 test('shorter unselected context tail is accepted without retiming selected interval',async t=>{
  const f=fixture(t);f.job.generation.processEnd=5;f.job.generation.start=1;f.job.generation.end=4;
  const original=f.dependencies.runMedia;const requests=[];
- f.dependencies.runMedia=async request=>{requests.push(request);if(request.action==='probe')return {duration:113/24,hasAudio:true};return original(request);};
+ f.dependencies.runMedia=async request=>{requests.push(request);if(request.action==='probe')return {width:1280,height:720,duration:113/24,hasAudio:true};return original(request);};
  await f.runner().run(f.job);assert.equal(f.job.status,'completed');assert.equal(f.job.generation.generatedDuration,113/24);
  assert.match(f.job.result.note,/duration differs/);assert.match(f.job.result.note,/without retiming or looping/);
  const trim=requests.find(request=>request.action==='extract'&&request.source===f.job.generation.paths.raw);
@@ -142,7 +142,7 @@ test('shorter unselected context tail is accepted without retiming selected inte
 test('output ending inside selected interval fails closed before composition',async t=>{
  const f=fixture(t);f.job.generation.processEnd=5;f.job.generation.start=1;f.job.generation.end=4;
  const original=f.dependencies.runMedia;
- f.dependencies.runMedia=async request=>request.action==='probe'?{duration:3.99,hasAudio:true}:original(request);
+ f.dependencies.runMedia=async request=>request.action==='probe'?{width:1280,height:720,duration:3.99,hasAudio:true}:original(request);
  await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.match(f.job.error,/Checking this completed request again cannot add frames/);assert.equal(f.job.retryable,false);assert.equal(f.job.failureCode,'OUTPUT_TOO_SHORT');assert.equal(f.calls.render,0);assert.equal(Object.keys(f.db.candidates).length,0);assert.equal(f.db.projects.p.activeRevisionId,'r');
 });
 
@@ -242,4 +242,77 @@ test('candidate retains the validated user reference for later comparison',async
  await f.runner().run(f.job);
  assert.equal(f.job.status,'completed');assert.deepEqual(f.job.result.referenceImage,{id:'ref',url:'/media/ref.png',name:'Desired mug'});
  assert.equal(f.job.result.referenceImage.path,undefined);
+});
+
+test('background operation and holes survive generation and use protected foreground compositor',async t=>{
+ const f=fixture(t);const holes=[[[.4,.4],[.6,.4],[.6,.6],[.4,.6]]];
+ f.job.generation.operation='background';f.job.generation.masks=[{time:1,points:[[.1,.1],[.9,.1],[.9,.9],[.1,.9]],holes}];f.job.generation.scope='range';
+ const original=f.dependencies.runMedia;const requests=[];
+ f.dependencies.runMedia=async request=>{requests.push(request);return original(request)};
+ await f.runner().run(f.job);
+ assert.equal(f.job.status,'completed');assert.equal(f.job.generation.operation,'background');
+ const composition=requests.find(r=>r.action==='background_replace');assert.ok(composition);assert.deepEqual(composition.masks[0].holes,holes);
+ assert.equal(requests.some(r=>r.action==='object_repair'),false);assert.match(f.job.result.label,/background/);
+});
+
+test('background encoding progress persists and interrupted composition resumes without new provider work',async t=>{
+ const f=fixture(t);f.job.generation.operation='background';f.job.generation.masks=[{time:1,points:[[.1,.1],[.9,.1],[.9,.9],[.1,.9]]}];
+ const original=f.dependencies.runMedia;let fail=true;const snapshots=[];const save=f.dependencies.save;
+ f.dependencies.save=()=>{save();if(f.job.progress)snapshots.push({phase:f.job.phase,progress:{...f.job.progress}});};
+ f.dependencies.runMedia=async(request,onProgress)=>{
+  if(request.action==='background_replace'){
+   for(const stage of ['preparing','compositing','encoding','verifying']){onProgress({stage,completed:12,total:120});await new Promise(resolve=>setImmediate(resolve));}
+   if(fail)throw Error('Simulated encoder timeout');
+  }
+  return original(request);
+ };
+ await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.equal(f.job.generation.downloaded,true);assert.equal(f.job.generation.trimmed,true);
+ assert.ok(snapshots.some(s=>s.phase==='Checking preserved pixels'&&s.progress.completed===12));
+ const paid={submit:f.calls.submit,poll:f.calls.poll,download:f.calls.download,upload:f.calls.upload,estimate:f.calls.estimate};
+ fail=false;await f.runner().run(f.job);assert.equal(f.job.status,'completed');assert.equal(f.job.progress,undefined);
+ assert.deepEqual({submit:f.calls.submit,poll:f.calls.poll,download:f.calls.download,upload:f.calls.upload,estimate:f.calls.estimate},paid);
+});
+
+test('progress persistence failure blocks publication and recovery never resubmits',async t=>{
+ const f=fixture(t);f.job.generation.operation='background';let rejectProgress=true;
+ const save=f.dependencies.save;
+ f.dependencies.save=()=>{if(rejectProgress&&f.job.progress?.stage==='encoding'){rejectProgress=false;return Promise.reject(Error('Simulated progress save failure'));}return save();};
+ const original=f.dependencies.runMedia;
+ f.dependencies.runMedia=async(q,progress)=>{if(q.action==='background_replace')progress({stage:'encoding',completed:20,total:120});return original(q);};
+ await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.equal(Object.keys(f.db.candidates).length,0);assert.equal(f.calls.submit,1);
+ await f.runner().run(f.job);assert.equal(f.job.status,'completed');assert.equal(f.calls.submit,1);assert.equal(f.calls.download,1);
+});
+
+test('progress bursts keep one active write and flush the latest value before finishing',async()=>{
+ const {coalescedProgressWriter}=await import('./generation-runner.mjs');
+ let latest=0,release;const saved=[];
+ const writer=coalescedProgressWriter(async()=>{saved.push(latest);if(saved.length===1)await new Promise(resolve=>{release=resolve;});});
+ writer.mark();await new Promise(resolve=>setImmediate(resolve));
+ for(let i=1;i<=5000;i++){latest=i;writer.mark();}
+ assert.deepEqual(saved,[0]);
+ let finished=false;const done=writer.finish().then(()=>{finished=true;});
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);
+ release();await done;assert.deepEqual(saved,[0,5000]);
+ writer.mark();await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(saved,[0,5000]);
+});
+
+test('progress updates between fast saves are throttled and final pending state is durable',async()=>{
+ const {coalescedProgressWriter}=await import('./generation-runner.mjs');
+ let latest=1;const saved=[];const writer=coalescedProgressWriter(()=>{saved.push(latest);});
+ writer.mark();await new Promise(resolve=>setImmediate(resolve));
+ for(let i=2;i<=100;i++){latest=i;writer.mark();await new Promise(resolve=>setImmediate(resolve));}
+ assert.deepEqual(saved,[1]);await writer.finish();assert.deepEqual(saved,[1,100]);
+});
+
+test('prepared clip measurements inform assumptions and mismatched quote freezes before submit',async t=>{
+ const f=fixture(t);f.job.generation.approvedEstimateUsd=.1;const original=f.dependencies.runMedia;
+ f.dependencies.runMedia=async q=>q.action==='probe'&&q.source===f.job.generation.paths?.clip?{width:854,height:480,duration:4.5}:original(q);
+ let seen;f.adapter.estimateGeneration=async input=>{seen=input.pricingDimensions;return {estimatedUsd:.2,source:'authenticated-provider-estimate'};};
+ await f.runner().run(f.job);assert.deepEqual(seen,{width:896,height:512,inputSeconds:4.5,outputSeconds:4.5});assert.deepEqual(f.job.generation.quote.measuredInput,{width:854,height:480,duration:4.5});assert.equal(f.job.status,'failed');assert.equal(f.calls.submit,0);assert.equal(f.db.spend.reserved,0);
+});
+
+test('invalid measured clip metadata blocks estimate and submission',async t=>{
+ const f=fixture(t);const original=f.dependencies.runMedia;
+ f.dependencies.runMedia=async q=>q.action==='probe'&&q.source===f.job.generation.paths?.clip?{duration:4}:original(q);
+ await f.runner().run(f.job);assert.equal(f.job.status,'failed');assert.match(f.job.error,/dimensions or duration/);assert.equal(f.calls.estimate,0);assert.equal(f.calls.submit,0);assert.equal(f.db.spend.reserved,0);
 });
