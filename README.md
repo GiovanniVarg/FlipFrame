@@ -4,7 +4,7 @@
 
 ![FlipFrame — a visual concept for precise video editing](docs/assets/flipframe-hero.png)
 
-*Concept artwork. The comparisons below will show actual edits made in FlipFrame.*
+*Concept artwork above. Watch actual FlipFrame comparisons below.*
 
 FlipFrame is an open-source video editor for the part you want to change—and the rest you want to keep. Bring your own footage or generate a video, tell the assistant what you have in mind, and choose exactly where and when the edit belongs.
 
@@ -16,19 +16,19 @@ Conversation gets you started; hands-on controls help you get precise. Pause on 
 
 ### 01 · Change an object
 
-**Original → edited:** a focused change to one object during a selected part of the video.
+A woman in a flowing dress becomes a man in a light suit, with the rocky coastline and sunset retained around the subject. Original on top; edited result below.
 
-*Comparison video coming soon.*
+[![Watch the coastal subject replacement comparison](docs/assets/mountain-comparison.jpg)](docs/assets/mountain-comparison.mp4)
 
-<!-- COMPARISON VIDEO 1: Replace the line above with a GitHub-uploaded video attachment URL showing the original and edited object. -->
+[Watch the object-edit comparison · 2 seconds](docs/assets/mountain-comparison.mp4)
 
 ### 02 · Change the background
 
-**Original → edited:** a new setting around the object you want to keep, including the background visible through openings in its mask.
+A wooden bottle in a light product setup, shown in a stacked comparison. Watch the backdrop and shadow detail around the bottle as you compare the original above with the edited result below.
 
-*Comparison video coming soon.*
+[![Watch the bottle comparison](docs/assets/bottle-comparison.jpg)](docs/assets/bottle-comparison.mp4)
 
-<!-- COMPARISON VIDEO 2: Replace the line above with a GitHub-uploaded video attachment URL showing the original and replaced background. -->
+[Watch the bottle comparison · 4 seconds](docs/assets/bottle-comparison.mp4)
 
 ## From an idea to an edit
 
