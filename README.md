@@ -22,9 +22,9 @@ A woman in a flowing dress becomes a man in a light suit, with the rocky coastli
 
 [Watch the object-edit comparison · 2 seconds](docs/assets/mountain-comparison.mp4)
 
-### 02 · Change the background
+### 02 · Change an object’s motion
 
-A wooden bottle in a light product setup, shown in a stacked comparison. Watch the backdrop and shadow detail around the bottle as you compare the original above with the edited result below.
+The wooden bottle’s cap screws on and off in the edited clip. Compare the original above with the edited result below to see the change in the cap’s motion.
 
 [![Watch the bottle comparison](docs/assets/bottle-comparison.jpg)](docs/assets/bottle-comparison.mp4)
 
