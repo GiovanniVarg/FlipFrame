@@ -1,0 +1,15 @@
+{
+  "name": "@higgsfield/client",
+  "version": "0.2.6",
+  "license": "MIT",
+  "author": {
+    "name": "Higgsfield"
+  },
+  "gitHead": "e3f274249962417e21f6566d4eecec6d8491d11c",
+  "repository": {
+    "url": "git+https://github.com/higgsfield-ai/higgsfield-js.git",
+    "type": "git"
+  },
+  "registry": "https://registry.npmjs.org/@higgsfield%2fclient/0.2.6",
+  "note": "Upstream declares MIT but no own full copyright/license notice was present in the published package or exact source commit. This metadata is not a replacement license."
+}

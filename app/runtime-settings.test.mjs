@@ -10,7 +10,7 @@ test('settings preserve originals and blank keys; sanitized output; reload persi
  const ROOT=fixture(t),original='UNKNOWN=preserve\nHF_CREDENTIALS=fake-original\n';fs.writeFileSync(path.join(ROOT,'.env.local'),original);
  const env={HF_CREDENTIALS:'fake-original',TYPESAFE_API_KEY:'fake-existing'};const store=createSettingsStore({ROOT,env});
  const response=store.save({HF_CREDENTIALS:'',LLM_API_KEY:'fake-new',SAM2_DEVICE:'cuda',REASONING_PROVIDER:'anthropic'});
- assert.equal(env.HF_CREDENTIALS,'fake-original');assert.equal(fs.readFileSync(path.join(ROOT,'.env.local'),'utf8'),original);
+ assert.equal(env.HF_CREDENTIALS,'fake-original');assert.equal(fs.readFileSync(path.join(ROOT,'.env.local'),'utf8').startsWith(original),true);
  assert.equal(JSON.stringify(response).includes('fake-'),false);assert.equal(response.configured.LLM_API_KEY,true);
  const reloaded={};loadRuntimeSettings(ROOT,reloaded);assert.equal(reloaded.LLM_API_KEY,'fake-new');assert.equal(reloaded.SAM2_DEVICE,'cuda');
  assert.equal(fs.existsSync(path.join(ROOT,'.local-settings','HF_CREDENTIALS')),false);
@@ -67,4 +67,37 @@ test('old placeholder override loads as not-ready instead of blocking startup',t
  const ROOT=fixture(t);fs.mkdirSync(path.join(ROOT,'.local-settings'));
  fs.writeFileSync(path.join(ROOT,'.local-settings','HF_CREDENTIALS'),'your-key-id:your-key-secret');
  const env={};loadRuntimeSettings(ROOT,env);assert.equal(settingsReadiness(env).video,false);
+});
+
+test('atomic dotenv saves preserve other lines, override migrated legacy fields and survive restart',t=>{
+ const ROOT=fixture(t);fs.writeFileSync(path.join(ROOT,'.env.local'),'# Personal comment\nOTHER="keep me"\nLLM_API_KEY="old"\n');
+ fs.mkdirSync(path.join(ROOT,'.local-settings'));fs.writeFileSync(path.join(ROOT,'.local-settings','LLM_API_KEY'),'fake-legacy');fs.writeFileSync(path.join(ROOT,'.local-settings','SAM2_DEVICE'),'cpu');
+ const env={LLM_API_KEY:'fake-legacy'};createSettingsStore({ROOT,env}).save({LLM_API_KEY:'fake-new-key',LLM_MODEL:'model-one'});
+ const text=fs.readFileSync(path.join(ROOT,'.env.local'),'utf8');assert.ok(text.includes('# Personal comment\nOTHER="keep me"'));assert.ok(text.includes('LLM_API_KEY="fake-new-key"'));assert.equal(text.includes('LLM_API_KEY="old"'),false);
+ const reloaded={};loadRuntimeSettings(ROOT,reloaded);assert.equal(reloaded.LLM_API_KEY,'fake-new-key');assert.equal(reloaded.SAM2_DEVICE,'cpu');assert.equal(reloaded.LLM_MODEL,'model-one');
+ createSettingsStore({ROOT,env}).save({LLM_API_KEY:'',HIGGSFIELD_TEST_BUDGET_USD:'5'});const again={};loadRuntimeSettings(ROOT,again);assert.equal(again.LLM_API_KEY,'fake-new-key');assert.equal(again.HIGGSFIELD_TEST_BUDGET_USD,'5');
+});
+test('dotenv update replaces complete multiline and duplicate assignments; failure leaves process untouched',t=>{
+ const ROOT=fixture(t);fs.writeFileSync(path.join(ROOT,'.env.local'),'LLM_MODEL="old\nmultiline"\nLLM_MODEL=duplicate\n# Keep this\n');
+ const env={};const store=createSettingsStore({ROOT,env});store.save({LLM_MODEL:'new-model'});const text=fs.readFileSync(path.join(ROOT,'.env.local'),'utf8');assert.equal(text.includes('multiline'),false);assert.equal(text.match(/LLM_MODEL=/g).length,1);assert.ok(text.includes('# Keep this'));
+ const before=JSON.stringify(env);fs.rmSync(path.join(ROOT,'.env.local'));fs.mkdirSync(path.join(ROOT,'.env.local'));assert.throws(()=>store.save({LLM_MODEL:'will-not-save'}));assert.equal(JSON.stringify(env),before);
+});
+test('unrelated multiline values with assignment-looking content remain identical',t=>{
+ const ROOT=fixture(t),original='UNRELATED="first\nLLM_MODEL=embedded-text\n# FlipFrame managed settings: not-metadata\nlast"\nLLM_MODEL=old-model\nKEEP=unchanged\n';fs.writeFileSync(path.join(ROOT,'.env.local'),original);
+ createSettingsStore({ROOT,env:{}}).save({LLM_MODEL:'new-model'});const text=fs.readFileSync(path.join(ROOT,'.env.local'),'utf8');assert.ok(text.includes('UNRELATED="first\nLLM_MODEL=embedded-text\n# FlipFrame managed settings: not-metadata\nlast"'));const env={};loadRuntimeSettings(ROOT,env);assert.equal(env.LLM_MODEL,'new-model');
+});
+
+test('literal escaped sequences round-trip through environment text',t=>{
+ const ROOT=fixture(t),value=String.raw`model\nvariant\rtest`;createSettingsStore({ROOT,env:{}}).save({LLM_MODEL:value});const env={};loadRuntimeSettings(ROOT,env);assert.equal(env.LLM_MODEL,value);
+});
+
+test('failed atomic rename leaves file and process unchanged and removes temporary file',t=>{
+ const ROOT=fixture(t),original='# Keep this\nLLM_MODEL=original\n';fs.writeFileSync(path.join(ROOT,'.env.local'),original);const env={LLM_MODEL:'original'};
+ const mocked=t.mock.method(fs,'renameSync',()=>{throw new Error('Simulated commit failure');});
+ assert.throws(()=>createSettingsStore({ROOT,env}).save({LLM_MODEL:'replacement'}),/Could not save local settings/);mocked.mock.restore();
+ assert.equal(env.LLM_MODEL,'original');assert.equal(fs.readFileSync(path.join(ROOT,'.env.local'),'utf8'),original);assert.deepEqual(fs.readdirSync(ROOT),['.env.local']);
+});
+
+test('migrated keys no longer read stale legacy field files',t=>{
+ const ROOT=fixture(t);fs.mkdirSync(path.join(ROOT,'.local-settings'));fs.writeFileSync(path.join(ROOT,'.local-settings','LLM_MODEL'),'x'.repeat(20000));createSettingsStore({ROOT,env:{}}).save({LLM_MODEL:'new-model'});const env={};loadRuntimeSettings(ROOT,env);assert.equal(env.LLM_MODEL,'new-model');
 });

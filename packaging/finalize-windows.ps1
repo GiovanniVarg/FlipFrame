@@ -2,9 +2,11 @@ param([Parameter(Mandatory=$true)][string]$OutputRoot)
 $ErrorActionPreference='Stop'
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot)
 $stage=Join-Path $OutputRoot 'FlipFrame-Windows-x64'
+. (Join-Path $PSScriptRoot 'assert-public-payload.ps1')
+Assert-PublicPayload $stage
 $nodeVersion=& (Join-Path $stage 'runtime/node/node.exe') --version
 $files=Get-ChildItem $stage -File -Recurse -Force | Where-Object {$_.FullName -ne (Join-Path $stage 'release-manifest.json')}
-$blocked=$files | Where-Object {$relative=$_.FullName.Substring($stage.Length+1);($relative -match '(^|[\\/])(\.env(?!\.example$)[^\\/]*|\.local-settings|\.git|\.segmentation|\.segmentation-env)([\\/]|$)' -or ($relative -match '(^|[\\/])data([\\/]|$)' -and $relative -notmatch '^runtime[\\/]python[\\/]Lib[\\/]site-packages[\\/](numpy|cv2)[\\/]')) -or $_.Extension -in @('.sqlite','.db','.log','.pt','.pth')}
+$blocked=$files | Where-Object {$relative=$_.FullName.Substring($stage.Length+1);($relative -match '(^|[\\/])(\.env(?!\.example$)[^\\/]*|key\.env|\.local-settings|\.git|\.segmentation|\.segmentation-env)([\\/]|$)' -or ($relative -match '(^|[\\/])data([\\/]|$)' -and $relative -notmatch '^runtime[\\/]python[\\/]Lib[\\/]site-packages[\\/](numpy|cv2)[\\/]')) -or $_.Extension -in @('.sqlite','.db','.log','.pt','.pth')}
 if($blocked){throw ('Private or generated files blocked: '+($blocked.Name -join ', '))}
 $manifest=$files | ForEach-Object {[ordered]@{path=$_.FullName.Substring($stage.Length+1).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()}}
 @{version=(Get-Content (Join-Path $stage 'app/package.json') -Raw | ConvertFrom-Json).version;builtAt=[DateTime]::UtcNow.ToString('o');node=$nodeVersion;python='3.12.10';unsigned=$true;files=$manifest} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $stage 'release-manifest.json') -Encoding UTF8

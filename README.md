@@ -39,7 +39,7 @@ Background replacement uses a local compositor to preserve reviewed foreground p
 
 Extract the **entire Windows ZIP**, then open **FlipFrame.exe**. Keep it beside the bundled app and runtime folders. The launcher starts a local server and opens Studio in your browser; it is not an installer or an embedded browser.
 
-Basic Node and Python runtimes are included. Remote AI features need internet access and your own provider credentials. Large optional segmentation models are separate downloads; see [SETUP.txt](SETUP.txt).
+Basic Node and Python runtimes are included. On first launch, FlipFrame downloads about **88 MB** of pinned media tools directly from the official Python package host, verifies their checksums, and installs them in your local FlipFrame folder. Keep internet access available for this first setup. Later launches reuse those tools. Remote AI features still need internet and your own provider credentials. Large optional segmentation models are separate downloads; see [SETUP.txt](SETUP.txt).
 
 Studio prompts for missing assistant and video connections. You can skip setup and use local features; missing connections are offered again when you reopen Studio. Saved credentials are never returned to the setup screen. Configuration checks do not verify account validity or available credit.
 
@@ -47,7 +47,7 @@ Paid generation requires a **positive local spending allowance**. The default is
 
 Projects, connections and model caches live in `%LOCALAPPDATA%\FlipFrame`. Keep that folder when updating. Development checkouts keep app-local data unless `FLIPFRAME_USER_DIR` is set.
 
-**Preview release:** the Windows build is unsigned and may show an unknown-publisher warning. Public distribution still needs clean-machine verification, versioned checksums and the codec source/licensing work described in [third-party notices](THIRD_PARTY_NOTICES.md).
+**Windows x64 preview:** this build is unsigned and may show an unknown-publisher warning. The ZIP includes a file manifest and a separate SHA-256 checksum. Media packages and codec binaries are downloaded on first launch rather than bundled in the ZIP. See the [release guide](docs/RELEASE.md) and [third-party notices](THIRD_PARTY_NOTICES.md). Testing on an isolated user profile does not replace testing on a separate clean Windows computer.
 
 ## Connections and local tools
 

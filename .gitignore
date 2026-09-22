@@ -30,3 +30,6 @@ release-build*/
 # Small, intentionally published README demo clips
 !docs/assets/mountain-comparison.mp4
 !docs/assets/bottle-comparison.mp4
+
+# Local Python install-manager runtime, never a source artifact.
+app/Python/

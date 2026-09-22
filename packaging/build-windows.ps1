@@ -1,9 +1,7 @@
-param([string]$PythonBuild=(Get-Command python.exe).Source,[string]$OutputRoot='')
+param([string]$OutputRoot='', [switch]$PrepareOnly)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $app=Join-Path $repo 'app'
-$pythonVersion=& $PythonBuild -c 'import sys; print(str(sys.version_info.major)+"."+str(sys.version_info.minor))'
-if($LASTEXITCODE -or $pythonVersion -ne '3.12'){throw 'Dependency assembly requires Python 3.12 x64 to match the bundled runtime.'}
 if(!$OutputRoot){$OutputRoot=Join-Path $repo 'release-build'}
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot)
 $cache=Join-Path $OutputRoot 'cache'
@@ -30,6 +28,10 @@ foreach($name in $pythonFiles){Copy-Item -LiteralPath (Join-Path $app $name) -De
 foreach($name in @('package.json','package-lock.json','requirements.txt','AGENT_API.md','PRICING.md','.env.example')){if(Test-Path (Join-Path $app $name)){Copy-Item -LiteralPath (Join-Path $app $name) -Destination (Join-Path $payload $name)}}
 Copy-Item -LiteralPath (Join-Path $app 'dist') -Destination (Join-Path $payload 'dist') -Recurse
 foreach($name in @('LICENSE','README.md','SECURITY.md','CONTRIBUTING.md','THIRD_PARTY_NOTICES.md','SETUP.txt')){if(Test-Path (Join-Path $repo $name)){Copy-Item -LiteralPath (Join-Path $repo $name) -Destination (Join-Path $stage $name)}}
+$licenseDir=Join-Path $PSScriptRoot 'licenses'
+if(Test-Path $licenseDir){New-Item -ItemType Directory -Force (Join-Path $stage 'packaging') | Out-Null;Copy-Item -LiteralPath $licenseDir -Destination (Join-Path $stage 'packaging/licenses') -Recurse}
+$releaseGuide=Join-Path $repo 'docs/RELEASE.md'
+if(Test-Path $releaseGuide){New-Item -ItemType Directory -Force (Join-Path $stage 'docs') | Out-Null;Copy-Item -LiteralPath $releaseGuide -Destination (Join-Path $stage 'docs/RELEASE.md')}
 # Keep README artwork allowlisted; never copy arbitrary documentation uploads.
 $hero=Join-Path $repo 'docs/assets/flipframe-hero.png'
 if(Test-Path $hero){New-Item -ItemType Directory -Force (Join-Path $stage 'docs/assets') | Out-Null;Copy-Item -LiteralPath $hero -Destination (Join-Path $stage 'docs/assets/flipframe-hero.png')}
@@ -41,14 +43,10 @@ Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $stage 'runtime
 @('python312.zip','.','Lib/site-packages','../../app','import site') | Set-Content (Join-Path $stage 'runtime/python/python312._pth') -Encoding ASCII
 Push-Location $payload
 try{& npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund;if($LASTEXITCODE){throw 'Production dependency install failed'}}finally{Pop-Location}
-& $PythonBuild -m pip install --disable-pip-version-check --only-binary=:all: --target (Join-Path $stage 'runtime/python/Lib/site-packages') -r (Join-Path $app 'requirements.txt')
-if($LASTEXITCODE){throw 'Portable Python dependency assembly failed'}
-# Remove generated interpreter caches (never needed in distribution).
-Get-ChildItem (Join-Path $stage 'runtime/python') -Directory -Recurse -Filter '__pycache__' | ForEach-Object {$resolved=[IO.Path]::GetFullPath($_.FullName);if(!$resolved.StartsWith($stage+[IO.Path]::DirectorySeparatorChar)){throw 'Unsafe cache path'};Remove-Item -LiteralPath $resolved -Recurse -Force}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'bootstrap_media.py') -Destination (Join-Path $stage 'bootstrap_media.py')
+New-Item -ItemType Directory -Force (Join-Path $stage 'packaging') | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'bootstrap_media.py') -Destination (Join-Path $stage 'packaging/bootstrap_media.py')
 $csc=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 & $csc /nologo /target:winexe /platform:x64 /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll ('/out:'+(Join-Path $stage 'FlipFrame.exe')) (Join-Path $PSScriptRoot 'Launcher.cs')
 if($LASTEXITCODE){throw 'Launcher compilation failed'}
-$python=Join-Path $stage 'runtime/python/python.exe'
-& $python -c 'import cv2,numpy,imageio_ffmpeg; print("Portable media runtime ready")'
-if($LASTEXITCODE){throw 'Portable Python smoke failed'}
-& (Join-Path $PSScriptRoot 'finalize-windows.ps1') -OutputRoot $OutputRoot
+if(!$PrepareOnly){& (Join-Path $PSScriptRoot 'finalize-windows.ps1') -OutputRoot $OutputRoot}

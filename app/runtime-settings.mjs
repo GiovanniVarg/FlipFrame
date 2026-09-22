@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {parseEnv} from 'node:util';
 const secrets=['LLM_API_KEY','TYPESAFE_API_KEY','HF_CREDENTIALS'];
 const choices={SAM2_DEVICE:['auto','cpu','cuda'],REASONING_PROVIDER:['jev','openai-compatible','anthropic','gemini'],VIDEO_PROVIDER:['higgsfield']};
 const defaults={HIGGSFIELD_TEST_BUDGET_USD:'0',SAM2_DEVICE:'auto',REASONING_PROVIDER:'jev',VIDEO_PROVIDER:'higgsfield',LLM_BASE_URL:'',LLM_MODEL:''};
@@ -43,23 +44,65 @@ export function validateSettings(input,{credentials=true}={}){
   patch[key]=value;
  }return patch;
 }
-function directory(ROOT){const dir=path.join(ROOT,'.local-settings');fs.mkdirSync(dir,{recursive:true,mode:0o700});const stat=fs.lstatSync(dir);if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('Invalid settings directory');return dir;}
-// Runtime-only loader. Values never leave the server; original .env files remain untouched.
+const managedPrefix='# FlipFrame managed settings: ';
+function readEnvironment(ROOT){
+ const file=path.join(ROOT,'.env.local');if(!fs.existsSync(file))return '';
+ const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>1024*1024)throw new Error('Invalid local environment file');
+ return fs.readFileSync(file,'utf8');
+}
+function environmentBlocks(text){
+ const lines=text.split(/\r?\n/),blocks=[];
+ for(let i=0;i<lines.length;i++){
+  const block={lines:[lines[i]]},match=lines[i].match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+  if(match){block.key=match[1];const rhs=match[2],quote=['"',"'",'`'].includes(rhs[0])?rhs[0]:null;
+   if(quote&&rhs.indexOf(quote,1)<0){let closed=false;while(i+1<lines.length){i++;block.lines.push(lines[i]);if(lines[i].includes(quote)){closed=true;break;}}if(!closed)throw new Error('Unclosed quoted environment value');}
+  }
+  blocks.push(block);
+ }return blocks;
+}
+function managedKeys(text){
+ const block=environmentBlocks(text).find(block=>!block.key&&block.lines[0].startsWith(managedPrefix));if(!block)return [];
+ try{const keys=JSON.parse(block.lines[0].slice(managedPrefix.length));if(!Array.isArray(keys)||keys.some(key=>!fields.includes(key)))throw Error();return keys;}catch{throw new Error('Invalid managed settings metadata');}
+}
+function serializeValue(value){
+ for(const quote of ['"',"'",'`'])if(!value.includes(quote)){const serialized=quote+value+quote;if(parseEnv('VALUE='+serialized).VALUE===value)return serialized;}
+ throw invalid('A setting cannot contain all three quote styles.');
+}
+// Keep unrelated assignments/comments verbatim. Replace a complete quoted assignment,
+// including an older multiline value, so no leftover lines become environment entries.
+function updateEnvironment(text,patch){
+ const keys=[...new Set([...managedKeys(text),...Object.keys(patch)])];
+ const output=[],written=new Set();
+ for(const block of environmentBlocks(text)){
+  if(!block.key&&block.lines[0].startsWith(managedPrefix))continue;
+  if(!block.key||!Object.hasOwn(patch,block.key)){output.push(...block.lines);continue;}
+  if(!written.has(block.key)){output.push(block.key+'='+serializeValue(patch[block.key]));written.add(block.key);}
+ }
+ while(output.length&&output.at(-1)==='')output.pop();
+ for(const [key,value] of Object.entries(patch))if(!written.has(key))output.push(key+'='+serializeValue(value));
+ output.push(managedPrefix+JSON.stringify(keys));return output.join('\n')+'\n';
+}
+// Legacy per-field settings remain effective until that field is saved into .env.local.
 export function loadRuntimeSettings(ROOT,env=process.env){
- const dir=path.join(ROOT,'.local-settings');if(!fs.existsSync(dir))return;
- if(fs.lstatSync(dir).isSymbolicLink())throw new Error('Invalid settings directory');
- const patch={};for(const key of fields){const file=path.join(dir,key);if(!fs.existsSync(file))continue;const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>16384)throw new Error('Invalid saved setting');patch[key]=fs.readFileSync(file,'utf8');}
+ const text=readEnvironment(ROOT),parsed=parseEnv(text),managed=managedKeys(text);
+ const dir=path.join(ROOT,'.local-settings'),patch={};
+ if(fs.existsSync(dir)){
+  if(fs.lstatSync(dir).isSymbolicLink())throw new Error('Invalid settings directory');
+  for(const key of fields){if(managed.includes(key))continue;const file=path.join(dir,key);if(!fs.existsSync(file))continue;const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>16384)throw new Error('Invalid saved setting');patch[key]=fs.readFileSync(file,'utf8');}
+ }
+ for(const key of managed){if(!Object.hasOwn(parsed,key))throw new Error('Missing managed setting');patch[key]=parsed[key];}
  Object.assign(env,validateSettings(patch,{credentials:false}));
 }
 export function createSettingsStore({ROOT,env=process.env}){return {snapshot:()=>publicSettings(env),save(input){
  const patch=validateSettings(input);if(!Object.keys(patch).length)return publicSettings(env);
- const dir=directory(ROOT);
- // Each submitted field is atomically replaced. No existing credential file is opened.
- for(const [key,value] of Object.entries(patch)){
-  const temporary=path.join(dir,`.${key}.${randomUUID()}.tmp`);const target=path.join(dir,key);
-  try{fs.writeFileSync(temporary,value,{mode:0o600,flag:'wx'});fs.renameSync(temporary,target);env[key]=value;}
-  catch{try{fs.rmSync(temporary,{force:true});}catch{}throw new Error('Could not save local settings.');}
- }return publicSettings(env);
+ const original=readEnvironment(ROOT),text=updateEnvironment(original,patch);
+ // Verify dotenv round-trips exactly before committing. Never return file contents.
+ const parsed=parseEnv(text);for(const [key,value] of Object.entries(patch))if(parsed[key]!==value)throw invalid('This setting cannot be saved as environment text.');
+ for(const [key,value] of Object.entries(parseEnv(original)))if(!Object.hasOwn(patch,key)&&parsed[key]!==value)throw new Error('Unrelated environment value changed');
+ const target=path.join(ROOT,'.env.local'),temporary=path.join(ROOT,`.env.local.${randomUUID()}.tmp`);
+ try{fs.writeFileSync(temporary,text,{mode:0o600,flag:'wx'});fs.renameSync(temporary,target);}
+ catch{try{fs.rmSync(temporary,{force:true});}catch{}throw new Error('Could not save local settings.');}
+ Object.assign(env,patch);return publicSettings(env);
 }};}
 export function registerRuntimeSettings(app,{ROOT,MODE,asyncRoute,env=process.env,probeHardware}){
  const store=createSettingsStore({ROOT,env});
